@@ -684,7 +684,19 @@ export default function App() {
   // ── Tier item commit (shared across edit interaction and commitLabel) ──
   const commitTierItems = useCallback((tierId, updated) => {
     if (tierId === 'words') {
-      wordsRef.current = updated; setWords([...updated]);
+      const prevById = new Map(wordsRef.current.map(it => [it.id, it]));
+      const marked = updated.map(it => {
+        const prev = prevById.get(it.id);
+        // Already edited, newly created, or changed → mark edited
+        if (prev?.edited) return { ...it, edited: true };
+        if (!prev) return { ...it, edited: true };
+        if (prev.text !== it.text || prev.t0 !== it.t0 || prev.t1 !== it.t1) {
+          return { ...it, edited: true };
+        }
+        return it;
+      });
+      wordsRef.current = marked;
+      setWords([...marked]);
     } else if (tierId === 'phones') {
       phonesRef.current = updated; setPhones([...updated]);
     } else {
@@ -1026,13 +1038,15 @@ export default function App() {
 
       const isSelected = inEdit && selTiles.has(item.id);
       const hasScore = isWord && item.score != null;
+      const isEdited   = isWord && item.edited;
       const fill   = isSelected ? (isWord ? 'rgba(58,123,213,0.55)' : 'rgba(60,200,130,0.50)')
+                   : isEdited   ? (inEdit ? 'rgba(58,123,213,0.40)' : 'rgba(58,123,213,0.28)')
                    : hasScore   ? scoreColor(item.score, inEdit ? 0.40 : 0.28)
                    :              (inEdit ? editFill : fillColor);
       const stroke = isSelected ? (isWord ? '#7aacf0' : '#60e8a0')
+                   : isEdited   ? '#3a7bd5'
                    : hasScore   ? scoreColor(item.score, 0.75)
-                   :              strokeColor;
-
+                   :              strokeColor;            
       ctx.fillStyle = fill;
       ctx.fillRect(x0, ry + 2, bw, rowH - 4);
       ctx.strokeStyle = stroke; ctx.lineWidth = isSelected ? 2 : (inEdit ? 1.5 : 1);
