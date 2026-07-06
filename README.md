@@ -58,6 +58,30 @@ This creates the necessary conda environments (`aligner`, `whisperx`, and `nemo`
 
 <video src="https://github.com/user-attachments/assets/95f06d80-a8f9-44ae-863f-acd5c6cb02d6" controls width="100%"></video>
 
+**Windows Note (Using WSL)**
+
+windows isnt supported since setup.sh is a bash script. use WSL
+
+```powershell
+wsl --install
+```
+Inside WSL, clone into wsl system
+```bash
+wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
+bash Miniconda3-latest-Linux-x86_64.sh -b -p ~/miniconda3
+~/miniconda3/bin/conda init bash
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
+nvm install 20
+```
+```bash
+conda run -n aligner mfa model download acoustic english_us_arpa
+conda run -n aligner mfa model download dictionary english_us_arpa
+cd frontend-reactjs && npm install
+```
+
+open http://localhost:5173
+
+
 ---
 
 ## Demo

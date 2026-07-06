@@ -1,0 +1,5 @@
+#lf endings for sh scripts so can run under bash when repo is cloned on windows
+#\r: command not found error pops up
+*.sh text eol=lf
+*.py text eol=lf
+*.yml text eol=lf

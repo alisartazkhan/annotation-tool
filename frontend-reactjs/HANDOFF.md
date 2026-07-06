@@ -109,12 +109,13 @@ Each item in any tier's items array is a plain object:
 
 ```js
 {
-  id: number,       // stable unique id (module-level counter, never reused)
-  t0: number,       // start time in seconds
-  t1: number,       // end time in seconds
-  text: string,     // label
-  row: number,      // stacking row (0 = top), assigned by assignRows()
-  score?: number,   // confidence 0–1, present on word items from Whisper TextGrid
+  id: number,        // stable unique id (module-level counter, never reused)
+  t0: number,        // start time in seconds
+  t1: number,        // end time in seconds
+  text: string,      // label
+  row: number,       // stacking row (0 = top), assigned by assignRows()
+  score?: number,    // confidence 0–1, present on word items from Whisper TextGrid
+  edited?: boolean,  // true when a word has been manually created or changed
 }
 ```
 
@@ -727,6 +728,21 @@ Word tiles colored by `item.score` via `scoreColor(score, alpha)`:
 - 1.0 → green `rgb(0, 200, 50)`
 
 Items without a score fall back to blue (words) or green (phonemes).
+
+### Edited word rendering
+
+Words with `edited: true` render as **blue** on the tier canvas regardless of their score value. In `drawTier`, the `isEdited` check takes priority over `hasScore` in the fill/stroke logic, so the blue color always wins for edited words.
+
+### Score assignment for edited and new words
+
+When a word is created or modified, `commitTierItems` sets `score: 1` alongside `edited: true`. This applies to all three cases handled in `commitTierItems`:
+- A word that was already previously edited (`prev?.edited`)
+- A brand new word with no previous entry (`!prev`)
+- A word whose text, `t0`, or `t1` changed from the original
+
+As a result, edited and new words are included in `ConfidenceDashboard` as high-confidence entries (score 1.0, shown as green in the histogram). Previously, words without a score were filtered out of the dashboard entirely.
+
+Note: the blue tile color and the green dashboard color are independent — `drawTier` uses the `edited` flag for canvas color; `ConfidenceDashboard` uses the `score` value for histogram and stats.
 
 **◎ Scores** button toggles `ConfidenceDashboard` — stat grid, 10-bin histogram, color legend, 5 lowest-confidence words.
 

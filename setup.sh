@@ -58,9 +58,12 @@ else
     echo "  → Skipping 'nemo' env (Parakeet is currently Linux/CUDA only)"
   else
     echo "  Creating 'nemo' env (Parakeet)..."
-    conda env create -f "$SCRIPT_DIR/asr/environment-parakeet.yml"
-    echo "  → done"
+    if conda env create -f "$SCRIPT_DIR/asr/environment-parakeet.yml"; then
+      echo "  → done"
+    else
+      echo "nemo env setup failed"
   fi
+fi
 fi
 
 # ── 2. MFA models ─────────────────────────────────────────────────────────────
