@@ -86,11 +86,24 @@ All visuals are drawn on `<canvas>` elements via the Canvas 2D API. There is no 
 | `drawRuler` | `rulerCanvasRef` | Time axis with adaptive tick spacing |
 | `drawTier` | `wordsCanvasRef` / `phonesCanvasRef` / custom canvas refs | Annotation tiles with multi-row stacking, confidence color coding, selection highlight |
 | `drawMinimap` | `minimapCanvasRef` | Full-duration overview with viewport box |
+| `drawScrollbar` | `scrollbarCanvasRef` | Track + thumb showing current view as a proportion of full duration |
 | `drawOverlay` | `overlayCanvasRef` | Playhead line only (separate overlay canvas) |
 
 `redraw()` calls all draws except the overlay. During playback, the RAF loop calls `drawOverlay()` and only calls `redraw()` when the view scrolls.
 
 **Important:** whenever selection changes (tile selected/deselected), always call `redraw()` — not `drawTier(canvas, ...)`. Calling only `drawTier` on the clicked canvas leaves stale highlights on other tier canvases.
+
+### Timeline scrollbar
+
+A slim strip (`.scrollbar-strip`, 14px tall) sits directly below the waveform/spectrogram panels, above the tier-divider — full-width, with a 56px `.scrollbar-gutter` matching `.panel-gutter`/`.ruler-gutter`/`.minimap-gutter` so all rows stay vertically aligned.
+
+`drawScrollbar()` draws a track plus a highlighted thumb rect sized/positioned by `t0/DUR` and `(t1-t0)/DUR` — the same proportions the minimap's viewport box uses, but without the minimap's word-tick thumbnails.
+
+Interaction is a standalone `useEffect` (mirrors the minimap's click/drag pattern — not routed through `addInteraction`):
+- **Click on the thumb** — drags relative to the grab point (`dragOffset`), so the view doesn't jump out from under the cursor.
+- **Click on bare track** — centers the thumb on the click point.
+- Thumb width is clamped to a 4px minimum so it stays draggable even when zoomed out to a tiny fraction of the full duration.
+- Like the minimap, `mousemove`/`mouseup` listeners are attached to `window` (not the canvas), so dragging keeps working even if the cursor leaves the thin 14px strip.
 
 ### View coordinates
 
@@ -815,6 +828,8 @@ Notable component classes:
 - **Tier canvases use `addInteraction(canvas, false)`** (wheel only). Their mousedown is handled by `addTierEditInteraction`. This avoids two conflicting mousedown handlers.
 
 - **`drawOverlay` does not call `drawMinimap`.** The minimap is repainted by `redraw()` on scroll ticks.
+
+- **The scrollbar's drag handler is its own `useEffect`, not part of the `addInteraction` cleanups array.** Like the minimap, it needs click-to-jump plus drag-to-pan semantics with a grab-point offset — different from the wheel/seek behavior `addInteraction` provides for the waveform/spectrogram/tier canvases.
 
 - **The `useEffect([redraw])` dep array is intentionally `[redraw]` only.** Draw functions read from refs. Adding state to the dep array causes double-draws on every edit drag.
 

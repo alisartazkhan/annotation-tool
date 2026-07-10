@@ -201,6 +201,19 @@ html, body {
 }
 .minimap canvas { flex: 1; min-width: 0; display: block; cursor: pointer; }
 
+/* ── Scrollbar (below spectrogram, drag to navigate) ── */
+.scrollbar-strip {
+  height: 14px; flex-shrink: 0;
+  display: flex; background: #0c0c0f;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+.scrollbar-gutter {
+  width: 56px; flex-shrink: 0;
+  background: var(--bg-panel); border-right: 1px solid var(--border);
+}
+.scrollbar-strip canvas { flex: 1; min-width: 0; display: block; cursor: pointer; }
+
 /* ── Token popup ── */
 .token-popup {
   position: fixed; z-index: 100;

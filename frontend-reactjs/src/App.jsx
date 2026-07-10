@@ -671,6 +671,7 @@ export default function App() {
   const wordsCanvasRef   = useRef(null);
   const phonesCanvasRef  = useRef(null);
   const minimapCanvasRef = useRef(null);
+  const scrollbarCanvasRef = useRef(null);
   const overlayCanvasRef = useRef(null);
   const timelineRef      = useRef(null);
   const timeDisplayRef   = useRef(null);
@@ -1151,6 +1152,19 @@ export default function App() {
     ctx.beginPath(); ctx.moveTo(px, 0); ctx.lineTo(px, h); ctx.stroke();
   }, []);
 
+  const drawScrollbar = useCallback(() => {
+    const s = setupCanvas(scrollbarCanvasRef.current);
+    if (!s) return;
+    const { ctx, w, h } = s;
+    const DUR = durationRef.current;
+    const { t0, t1 } = viewRef.current;
+    ctx.fillStyle = '#0c0c0f'; ctx.fillRect(0, 0, w, h);
+    if (!DUR) return;
+    const vx0 = (t0 / DUR) * w, vx1 = (t1 / DUR) * w;
+    ctx.fillStyle = '#3a3a42';
+    ctx.fillRect(Math.max(0, vx0), 2, Math.max(4, vx1 - vx0), h - 4);
+  }, []);
+
   const drawOverlay = useCallback(() => {
     const ov = overlayCanvasRef.current;
     const tl = timelineRef.current;
@@ -1188,7 +1202,8 @@ export default function App() {
       if (cv) drawTier(cv, tier.items, false);
     }
     drawMinimap();
-  }, [drawWave, drawSpec, drawFreqAxis, drawRuler, drawTier, drawMinimap]);
+    drawScrollbar();
+  }, [drawWave, drawSpec, drawFreqAxis, drawRuler, drawTier, drawMinimap, drawScrollbar]);
 
   // Returns all tier items as { id, items } excluding the given set of tier ids
   const getAllTiers = useCallback(() => [
@@ -1659,6 +1674,16 @@ export default function App() {
     ro.observe(el);
     return () => { ro.disconnect(); if (raf) cancelAnimationFrame(raf); };
   }, [redraw]);
+  // Warn before closing/refreshing when there are unsaved changes
+  useEffect(() => {
+    const handler = (e) => {
+      if (!isDirty) return;
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', handler);
+    return () => window.removeEventListener('beforeunload', handler);
+  }, [isDirty]);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -1893,6 +1918,43 @@ export default function App() {
       const rect = cv.getBoundingClientRect();
       pan(e.clientX - rect.left, rect.width);
       const onMove = (ev) => pan(ev.clientX - rect.left, rect.width);
+      const onUp = () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); };
+      window.addEventListener('mousemove', onMove);
+      window.addEventListener('mouseup', onUp);
+    };
+    cv.addEventListener('mousedown', onDown);
+    return () => cv.removeEventListener('mousedown', onDown);
+  }, [redraw]);
+
+  // Scrollbar drag-to-navigate (drag the thumb, or click the track to jump)
+  useEffect(() => {
+    const cv = scrollbarCanvasRef.current;
+    if (!cv) return;
+    let dragOffset = 0; // x-offset from thumb's left edge to where the user grabbed it
+    const moveTo = (thumbLeftX, rectWidth) => {
+      const { t0, t1 } = viewRef.current;
+      const span = t1 - t0, DUR = durationRef.current;
+      if (!DUR) return;
+      const thumbWidth = Math.max(4, (span / DUR) * rectWidth);
+      const clampedX = Math.max(0, Math.min(rectWidth - thumbWidth, thumbLeftX));
+      const newT0 = Math.max(0, Math.min(DUR - span, (clampedX / rectWidth) * DUR));
+      viewRef.current = { t0: newT0, t1: newT0 + span };
+      redraw();
+    };
+    const onDown = (e) => {
+      const rect = cv.getBoundingClientRect();
+      const { t0, t1 } = viewRef.current;
+      const span = t1 - t0, DUR = durationRef.current;
+      const thumbLeftX = DUR ? (t0 / DUR) * rect.width : 0;
+      const thumbWidth = DUR ? Math.max(4, (span / DUR) * rect.width) : 0;
+      const clickX = e.clientX - rect.left;
+      // If the click landed on the thumb itself, drag relative to grab point;
+      // otherwise (clicked on bare track) jump so the thumb is centered on the click.
+      dragOffset = (clickX >= thumbLeftX && clickX <= thumbLeftX + thumbWidth)
+        ? clickX - thumbLeftX
+        : thumbWidth / 2;
+      moveTo(clickX - dragOffset, rect.width);
+      const onMove = (ev) => moveTo((ev.clientX - rect.left) - dragOffset, rect.width);
       const onUp = () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); };
       window.addEventListener('mousemove', onMove);
       window.addEventListener('mouseup', onUp);
@@ -3276,6 +3338,11 @@ export default function App() {
               </div>
             </div>
           </div>
+        </div>
+
+        <div className="scrollbar-strip">
+          <div className="scrollbar-gutter" />
+          <canvas ref={scrollbarCanvasRef} />
         </div>
 
         <div
