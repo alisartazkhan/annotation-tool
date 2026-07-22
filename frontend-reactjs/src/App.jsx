@@ -575,8 +575,10 @@ export default function App() {
   const [showSpecSettings, setShowSpecSettings] = useState(false);
   const [editMode, setEditMode]         = useState(true);
   const [labelEditor, setLabelEditor]   = useState(null); // { id, tierId, tierType, text, x, y, boxW }
-  const [editShortcut, setEditShortcut] = useState('1');
-  const [editingShortcut, setEditingShortcut] = useState(false);
+  // Rebindable edit-mode shortcut — UI removed (hotkey is now hardcoded to '1', see keydown handler
+  // below); state kept commented out here so the split-button UI can be restored later if needed.
+  // const [editShortcut, setEditShortcut] = useState('1');
+  // const [editingShortcut, setEditingShortcut] = useState(false);
   const [showDashboard, setShowDashboard] = useState(false);
   const [playbackRate, setPlaybackRate]   = useState(1);
   const [mfaQueue, setMfaQueue]           = useState([]);      // {id,label,t0,t1,status,error}
@@ -602,7 +604,7 @@ export default function App() {
   const mfaQueueRef = useRef([]);
   const mfaProcessingRef = useRef(false);
   const playbackRateRef = useRef(1);
-  const editShortcutRef = useRef('1');
+  // const editShortcutRef = useRef('1'); // see commented-out editShortcut state above
 
   const panelSplitRef  = useRef(0.45);
   const wavePanelRef   = useRef(null);
@@ -1703,10 +1705,10 @@ export default function App() {
       if (e.code === 'KeyL') { const n = !loopModeRef.current; loopModeRef.current = n; setLoopMode(n); }
       if (e.code === 'KeyF') { viewRef.current = { t0: 0, t1: DUR }; redraw(); }
       if (e.code === 'Home') { viewRef.current = { t0: 0, t1: Math.min(DUR, 20) }; redraw(); }
-      // Match stored shortcut against e.code, e.key, and numpad equivalents
-      const _sc = editShortcutRef.current;
-      const _numpadAlias = e.code.startsWith('Numpad') && e.key === _sc;
-      if (e.code === _sc || e.key === _sc || _numpadAlias) {
+      // Edit mode hotkey — hardcoded to '1' now that the rebindable-shortcut UI is commented out
+      // (see the split-edit-button block in the toolbar JSX). To restore rebinding, swap this
+      // back to comparing e.code/e.key against editShortcutRef.current.
+      if (e.code === 'Digit1' || e.key === '1' || (e.code === 'Numpad1' && e.key === '1')) {
         e.preventDefault();
         const n = !editModeRef.current; editModeRef.current = n; setEditMode(n);
         if (!n) clearSelection(); // clear selection when leaving edit mode
@@ -3058,7 +3060,14 @@ export default function App() {
           <span className="zoom-label">ZOOM</span>
           <input type="range" min="0" max="100" value={zoomValue} onChange={e => handleZoom(+e.target.value)} title="Zoom level" />
         </div>
-        {/* ── Split edit button: left half toggles edit, right half rebinds shortcut ── */}
+        {/*
+          ── Split edit button: left half toggles edit, right half rebinds shortcut ──
+          Removed from the toolbar (2026-07) to reduce crowding — edit mode is now default-on
+          and toggled only via the hardcoded '1' hotkey (see keydown handler). To restore this
+          UI: uncomment this block plus the editShortcut/editingShortcut state and
+          editShortcutRef declarations above, and revert the keydown handler's edit-mode check
+          back to comparing against editShortcutRef.current.
+
         <div className={`btn-edit-split${editMode ? ' active' : ''}`}>
           <button
             className="btn-edit-split__main"
@@ -3097,6 +3106,7 @@ export default function App() {
             </button>
           )}
         </div>
+        */}
         <button
           className={`btn${showDashboard ? ' active' : ''}`}
           onClick={() => setShowDashboard(v => !v)}
@@ -3175,24 +3185,22 @@ export default function App() {
             </div>
           );
         })()}
-        {/*undo button*/}
         <button
-          className = "btn"
+          className="btn"
           onClick={() => { popUndo(); redraw(); }}
-          disabled = {undoStackRef.current.length === 0}
-          title = "undo (ctrl z)"
+          disabled={undoStackRef.current.length === 0}
+          title="Undo (Ctrl/Cmd+Z)"
         >
-          undo (ctrl+z)
+          ↶
         </button>
-                <button
+        <button
           className="btn"
           onClick={() => { popRedo(); redraw(); }}
           disabled={redoCount === 0}
-          title="Redo (Ctrl+Y)"
+          title="Redo (Ctrl/Cmd+Y)"
           style={{ opacity: redoCount === 0 ? 0.4 : 1 }}
         >
-          redo
-          (ctrl + y)
+          ↷
         </button>
         {/* ── Export button + filename popover ─────────────────────── */}
         <div style={{ position: 'relative' }}>

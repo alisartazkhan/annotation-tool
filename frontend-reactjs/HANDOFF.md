@@ -71,7 +71,6 @@ Every hot-path value has **both** a `useState` and a `useRef`. The state drives 
 | `colormapName` | `colormapNameRef` | Spectrogram colormap |
 | `showFormants` | `showFormantsRef` | Formant overlay toggle |
 | `playbackRate` | `playbackRateRef` | Playback speed multiplier |
-| `editShortcut` | `editShortcutRef` | Edit mode keyboard shortcut (default `1`) |
 
 **Rule:** always update both together — `ref.current = n; setState(n)`.
 
@@ -225,28 +224,15 @@ Word tiles use a slightly heavier weight (`500`); phoneme tiles use a monospace 
 
 ## Edit Mode
 
-**Edit mode is on by default on load** (`useState(true)` / `useRef(true)`). Toggled by the **split Edit button** in the toolbar or the configurable keyboard shortcut (default `1`).
+**Edit mode is on by default on load** (`useState(true)` / `useRef(true)`). Toggled only by the **`1` keyboard shortcut** — there is no toolbar button for it.
 
-### Split Edit Button
+### Split Edit Button (removed)
 
-The Edit button is a single unified control split into two clickable zones:
+The toolbar previously had a unified Edit button split into two clickable zones — a left half that toggled edit mode and a right half that showed the current hotkey and let you rebind it to any key. It was removed (2026-07) to reduce toolbar crowding: edit mode is default-on and rarely needs toggling, and the rebind feature added a second control for a rarely-changed setting.
 
-```
-┌──────────────────┬──────┐
-│  ✎ Edit mode     │  1   │
-└──────────────────┴──────┘
-        ↑ toggles        ↑ click to rebind
-      edit mode          shortcut
-```
+The JSX (`.btn-edit-split` / `__main` / `__divider` / `__badge` / `__capture`) is commented out in place in `App.jsx` (search "Split edit button") rather than deleted, along with the `editShortcut`/`editingShortcut` state and `editShortcutRef`, so the feature can be restored by uncommenting. The corresponding CSS rules in `index.css` were left in place (unused) for the same reason.
 
-- **Left half** (`.btn-edit-split__main`) — toggles edit mode
-- **Divider** — 1px separator
-- **Right half** (`.btn-edit-split__badge`) — shows current hotkey; click to enter shortcut-capture mode
-- **Capture input** (`.btn-edit-split__capture`) — replaces the badge while waiting for a keypress; `onBlur` cancels
-- When active, the entire button inverts (`.btn-edit-split.active`)
-- Label reads **`✎ Edit mode`** when active, **`✎ View mode`** when inactive — always shows the current mode
-
-Default shortcut is `1`. The keyboard handler matches against `e.code`, `e.key`, and numpad aliases (so numpad `1` also fires edit mode regardless of NumLock state).
+The hotkey is now **hardcoded to `1`** in the keydown handler (no longer configurable): it matches against `e.code`, `e.key`, and the numpad alias (`Numpad1`), so numpad `1` also fires edit mode regardless of NumLock state.
 
 ### Waveform interaction in edit mode
 
@@ -277,7 +263,7 @@ The tier canvases in edit mode (`addTierEditInteraction`) also support dragging 
 
 **Committing edits**: use `commitTierItems(tierId, updated)` inside this function.
 
-**Undo**: `pushUndo()` snapshots words + phones + customTiers (max 100). Ctrl/Cmd+Z fires `popUndo()` + `redraw()`.
+**Undo**: `pushUndo()` snapshots words + phones + customTiers (max 100). Ctrl/Cmd+Z fires `popUndo()` + `redraw()`. **Redo**: Ctrl/Cmd+Y fires `popRedo()` + `redraw()`. Both toolbar buttons are icon-only (`↶` / `↷`) — see [Keyboard Shortcuts](#keyboard-shortcuts).
 
 **Double-click empty** → creates tile, opens label editor.  
 **Double-click tile** → opens inline label editor.  
@@ -769,12 +755,15 @@ Note: the blue tile color and the green dashboard color are independent — `dra
 | L | Toggle loop |
 | F | Fit full duration |
 | Home | Reset to first 20s |
-| `1` (configurable) | Toggle edit mode |
+| `1` | Toggle edit mode (on by default; not currently rebindable — see [Split Edit Button (removed)](#split-edit-button-removed)) |
 | Ctrl/Cmd+S | Save TextGrid to `public/` (dev only) |
 | Ctrl/Cmd+Z | Undo |
+| Ctrl/Cmd+Y | Redo |
 | Arrow Left/Right | Pan by 20% of view |
 
-The edit mode shortcut is configurable via the right half of the split Edit button. The default is `1`. The keyboard handler checks `e.code`, `e.key`, and numpad aliases so numpad keys work regardless of NumLock state.
+The edit mode hotkey is hardcoded to `1` in the keydown handler. The check matches `e.code`, `e.key`, and the `Numpad1` alias so numpad `1` works regardless of NumLock state.
+
+> A dedicated keyboard-shortcut reference menu (in-app) is planned; until then this table is the source of truth. `USAGE.md`'s [quick-reference table](../USAGE.md#keyboard-shortcuts--quick-reference) mirrors it for end users.
 
 ---
 
@@ -796,16 +785,19 @@ Notable component classes:
 
 | Class | Purpose |
 |---|---|
-| `.btn-edit-split` | Split edit+hotkey button wrapper |
-| `.btn-edit-split__main` | Left half — toggles edit mode |
-| `.btn-edit-split__badge` | Right half — shows/rebinds hotkey |
-| `.btn-edit-split__capture` | Key-capture input (shown during rebind) |
+| `.btn-edit-split` / `__main` / `__badge` / `__capture` | Split edit+hotkey button — **unused**, kept for possible restore (see [Split Edit Button (removed)](#split-edit-button-removed)) |
 | `.edit-hint-bar` | Shortcut hint bar shown in edit mode |
 | `.save-indicator` | Inline save status in logo bar |
 | `.save-indicator--unsaved` | Amber — unsaved changes present |
 | `.save-indicator--saving/saved/error` | Blue/green/red state variants |
 
 `.panel-divider` and `.tier-divider` share one rule. `.panel-gutter` and `.tier-gutter` share a base rule; `.tier-gutter` adds `flex-direction: column; gap: 3px`.
+
+### Toolbar button height normalization
+
+Every button/control inside `.toolbar` (`.btn`, `.load-btn`, `.btn-edit-split`, `.colormap-select`) is pinned to one shared height via the `--toolbar-btn-h` CSS variable (currently `34px`, defined in `:root`), plus `display: flex; align-items: center; justify-content: center;` so label text stays vertically centered regardless of font-size differences between button variants. `white-space: nowrap` on `.toolbar .btn`/`.load-btn` stops icon+label text (e.g. `◎ Scores`, `▶ Play`) from wrapping onto two lines when the toolbar is tight on space.
+
+These rules are scoped with a `.toolbar` ancestor selector (`.toolbar .btn`, not bare `.btn`) so they don't affect the same class names reused in popovers/modals (Export popover, Tier-name popover, MFA word-picker modal), which are deliberately more compact. If you add a new toolbar control, give it one of the classes above (or add it to the scoped rule) rather than hand-tuning its padding — that's what caused the original height mismatch (no button class set an explicit `height`; each one's rendered height was just whatever `padding + font-size + border` happened to add up to).
 
 ---
 
@@ -850,6 +842,10 @@ Notable component classes:
 - **Right-click check `if (e.button === 2) return` must be the first statement** in `onMouseDown`. Any hit-testing before this check causes unwanted tier selection on right-click.
 
 - **Edit mode is on by default.** Both `useState(true)` and `useRef(true)` must match — if you change the default, update both.
+
+- **The edit-mode hotkey is hardcoded to `1`**, not read from state/ref. The rebindable-shortcut UI and its `editShortcut`/`editingShortcut`/`editShortcutRef` are commented out (see [Split Edit Button (removed)](#split-edit-button-removed)); don't reintroduce a reference to them elsewhere without restoring that block first.
+
+- **Toolbar button classes (`.toolbar .btn`, `.toolbar .load-btn`, etc.) set an explicit `height: var(--toolbar-btn-h)`.** Don't override `padding`'s vertical component or set a conflicting `height` on a specific toolbar button — it will fall out of alignment with its siblings. Adjust `--toolbar-btn-h` in `:root` if you need to resize all of them at once.
 
 - **`savedTextGridRef` must be updated on every successful save** alongside `setIsDirty(false)`. If only one is updated, the unsaved indicator will be wrong after the next undo.
 
@@ -914,3 +910,5 @@ When `/api/public-files` returns more than one `.wav` or `.TextGrid`, the app re
 - `buildMelSpectrogram` in `dsp.js` result is only used as a presence check for short audio; skipped entirely for audio > 10 min
 - `Ctrl/Cmd+S` save does not work in production builds (no server-side endpoint)
 - Browser holds full decoded `AudioBuffer` in memory for the entire session — no streaming path for long audio
+- No in-app keyboard-shortcut reference menu yet; `USAGE.md`'s quick-reference table and the [Keyboard Shortcuts](#keyboard-shortcuts) table here are the source of truth
+- Edit-mode hotkey is no longer rebindable from the UI (see [Split Edit Button (removed)](#split-edit-button-removed))
