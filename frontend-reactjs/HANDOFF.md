@@ -272,7 +272,7 @@ The tier canvases in edit mode (`addTierEditInteraction`) also support dragging 
 
 ### Cross-tier boundary snapping
 
-When dragging a tile edge or body, the dragged position magnetically snaps to any boundary in another tier within 10px. A yellow dashed guide line is drawn across all canvases at the snap target. Hold **Alt** to disable snapping for that drag.
+When dragging a tile edge or body, the dragged position magnetically snaps to any boundary in another tier within 10px. Hold **Alt** to disable snapping for that drag.
 
 Two helpers power snapping:
 
@@ -287,7 +287,13 @@ getCrossTierBoundaries(excludeId)   // flat array of all t0/t1 values from tiers
 
 **Group drag snap**: computes `groupOrigT0` (leftmost t0) and `groupOrigT1` (rightmost t1) across all selected tiles. Snaps the group's leading or trailing edge. Boundaries from tiers that have **no** selected tiles are used for cross-tier snap; unselected items in dragged tiers are used for same-tier snap — preventing the group's own boundaries from triggering spurious snaps.
 
-`drawSnapGuide()` paints the guide on all canvases after every `drawTier` call during drag. On `mouseup`, `snapGuideRef.current = null` and `redraw()` clears it.
+### Drag guide lines
+
+`snapGuideRef.current` holds `{ ts: number[] }` — the live time position(s) of the dragged tile/group's edge(s), updated on every `mousemove`, **regardless of whether a snap actually occurred**. `ts` has one entry for an edge drag (the dragged edge only) or two for a body/group drag (leading + trailing edge of the tile, or of the whole group treated as one virtual tile — never one line per tile in a multi-tile group). `drawSnapGuide()` draws a yellow dashed line for each entry in `ts`, across every canvas (wave, spec, words, phones, all custom tiers).
+
+Each `onMove` tick calls `redraw()` (a full clear + repaint of every canvas from the live refs) **before** `drawSnapGuide()` — not just `drawTier` on the dragged tier's own canvas. This matters because `drawSnapGuide` paints directly onto the wave/spec/other-tier canvases with no separate overlay layer; if those canvases aren't fully repainted every tick, each new guide line accumulates on top of the last tick's instead of replacing it, leaving a trail of dashed lines behind as the cursor moves (this was a real bug — fixed by switching from a per-canvas `drawTier` call to a full `redraw()` before every `drawSnapGuide()`).
+
+On `mouseup`, `snapGuideRef.current = null` and `redraw()` clears the lines.
 
 ### Edit mode hint bar
 
@@ -873,7 +879,9 @@ These rules are scoped with a `.toolbar` ancestor selector (`.toolbar .btn`, not
 
 - **`src.onended` must be guarded by `gen !== playGenRef.current` before `!playingRef.current`.** Calling `src.stop()` always fires `onended` — even when stopping manually to start a new source. The generation check must come first; if stale, return immediately so the old source's `onended` cannot touch `playheadRef`, kill the new source, or call `setPlaying(false)`.
 
-- **`drawSnapGuide` must be called after `drawTier`** during edge/body drags, not before. `drawTier` clears and repaints the canvas; calling `drawSnapGuide` first would be immediately overwritten.
+- **`drawSnapGuide` must be called after a full `redraw()`** during edge/body drags, not before, and not after just `drawTier` on the dragged tier's own canvas. `drawSnapGuide` paints directly onto the wave/spec/other-tier canvases too, with no separate overlay layer — if those aren't fully repainted every tick, guide lines accumulate into a trail instead of replacing the previous tick's line.
+
+- **`snapGuideRef.current` is always set during a drag, snap or no snap.** It holds `{ ts: number[] }`, the dragged tile/group's live edge position(s) — not just the snap target when one is found. Don't reintroduce the old `{ t }` shape or the `else { snapGuideRef.current = null }` pattern from non-snapped ticks; the guide lines are meant to continuously track the drag, only clearing to `null` on `mouseup`.
 
 - **`getAllTiers()` is the single source of truth for the tier list.** Do not build inline `[{ id: 'words', ... }, ...]` arrays elsewhere — use `getAllTiers()` so custom tiers are always included automatically.
 

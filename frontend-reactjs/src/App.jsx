@@ -663,7 +663,7 @@ export default function App() {
   const selectedTilesRef = useRef(new Map()); // id → { id, tierId } — multi-selected tiles in edit mode
   const selectionAnchorRef = useRef(null);
   const labelClipboardRef = useRef(null);
-  const snapGuideRef     = useRef(null); // { t: number } | null — active snap target during edge drag
+  const snapGuideRef     = useRef(null); // { ts: number[] } | null — live edge position(s) of the active drag (1 for edge drag, 2 for body/group drag)
 
   // ── Canvas element refs ───────────────────────────────────────────────
   const waveCanvasRef    = useRef(null);
@@ -1222,7 +1222,7 @@ export default function App() {
 
   const drawSnapGuide = useCallback(() => {
     const sg = snapGuideRef.current;
-    if (!sg) return;
+    if (!sg || !sg.ts || !sg.ts.length) return;
     const canvases = [
       waveCanvasRef.current,
       specCanvasRef.current,
@@ -1232,13 +1232,15 @@ export default function App() {
     ].filter(Boolean);
     for (const cv of canvases) {
       const { ctx, w, h } = setupCanvas(cv);
-      const x = tX(sg.t, w);
       ctx.save();
       ctx.strokeStyle = 'rgba(255, 220, 80, 0.85)';
       ctx.lineWidth = 1;
       ctx.setLineDash([4, 3]);
-      ctx.beginPath(); ctx.moveTo(x + 0.5, 0); ctx.lineTo(x + 0.5, h);
-      ctx.stroke();
+      for (const t of sg.ts) {
+        const x = tX(t, w);
+        ctx.beginPath(); ctx.moveTo(x + 0.5, 0); ctx.lineTo(x + 0.5, h);
+        ctx.stroke();
+      }
       ctx.restore();
     }
   }, [tX]);
@@ -2302,15 +2304,10 @@ export default function App() {
               const d = Math.abs(newT - bt);
               if (d < bestD) { bestD = d; best = bt; }
             }
-            if (best !== null) {
-              newT = Math.max(minT, Math.min(maxT, best));
-              snapGuideRef.current = { t: newT };
-            } else {
-              snapGuideRef.current = null;
-            }
-          } else {
-            snapGuideRef.current = null;
+            if (best !== null) newT = Math.max(minT, Math.min(maxT, best));
           }
+          // Guide line always tracks the dragged edge's live position, snapped or not.
+          snapGuideRef.current = { ts: [newT] };
 
           const updated = itemsRef.current.map(it => {
             if (it.id === item.id) return { ...it, [side === 'left' ? 't0' : 't1']: newT };
@@ -2318,7 +2315,9 @@ export default function App() {
             return it;
           });
           commitItems(updated);
-          drawTier(canvas, updated, isWord);
+          // Full redraw (not just this canvas) so the guide line replaces its previous
+          // position on every canvas instead of leaving a trail on wave/spec/other tiers.
+          redraw();
           drawSnapGuide();
         };
         const onUp = () => {
@@ -2393,13 +2392,11 @@ export default function App() {
               if (best !== null) {
                 const snappedDt = bestEdge === 't0' ? best - groupOrigT0 : best - groupOrigT1;
                 dt = Math.max(minDt, Math.min(maxDt, snappedDt));
-                snapGuideRef.current = { t: best };
-              } else {
-                snapGuideRef.current = null;
               }
-            } else {
-              snapGuideRef.current = null;
             }
+            // Guide lines always track the group's leading + trailing edges, snapped or not —
+            // never per-tile edges, so a multi-tile group shows exactly two lines.
+            snapGuideRef.current = { ts: [groupOrigT0 + dt, groupOrigT1 + dt] };
 
             for (const [dragTierId, origList] of origsByTier) {
               const tItemsRef = dragTierId === 'words'  ? wordsRef
@@ -2415,11 +2412,10 @@ export default function App() {
               const withRows = assignRows(updated);
               tItemsRef.current = withRows;
               commitTierItems(dragTierId, withRows);
-              const cv = dragTierId === 'words'  ? wordsCanvasRef.current
-                       : dragTierId === 'phones' ? phonesCanvasRef.current
-                       : customCanvasRefs.current[dragTierId];
-              if (cv) drawTier(cv, withRows, dragTierId === 'words');
             }
+            // Full redraw (not just the dragged tiers' canvases) so the guide line replaces its
+            // previous position on every canvas instead of leaving a trail on wave/spec/other tiers.
+            redraw();
             drawSnapGuide();
           };
           const onUp = () => {
@@ -2476,20 +2472,19 @@ export default function App() {
                 newT0 = bestEdge === 't0'
                   ? Math.max(0, Math.min(DUR - width, best))
                   : Math.max(0, Math.min(DUR - width, best - width));
-                snapGuideRef.current = { t: best };
-              } else {
-                snapGuideRef.current = null;
               }
-            } else {
-              snapGuideRef.current = null;
             }
+            // Guide lines always track the tile's live t0/t1, snapped or not.
+            snapGuideRef.current = { ts: [newT0, newT0 + width] };
 
             const updated = itemsRef.current.map(it =>
               it.id === item.id ? { ...it, t0: newT0, t1: newT0 + width } : it
             );
             const withRows = assignRows(updated);
             commitItems(withRows);
-            drawTier(canvas, withRows, isWord);
+            // Full redraw (not just this canvas) so the guide line replaces its previous
+            // position on every canvas instead of leaving a trail on wave/spec/other tiers.
+            redraw();
             drawSnapGuide();
           };
           const onUp = () => {
