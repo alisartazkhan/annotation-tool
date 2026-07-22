@@ -40,7 +40,7 @@ function IpaExample({ text }) {
   let last = 0, m;
   while ((m = re.exec(text)) !== null) {
     if (m.index > last) parts.push(text.slice(last, m.index));
-    parts.push(<strong key={m.index} style={{ fontWeight: 700, color: '#e8e6e1' }}>{m[1]}</strong>);
+    parts.push(<strong key={m.index} style={{ fontWeight: 700, color: 'var(--text)' }}>{m[1]}</strong>);
     last = m.index + m[0].length;
   }
   if (last < text.length) parts.push(text.slice(last));
@@ -77,7 +77,7 @@ function IpaKeyboard({ inputRef }) {
       onMouseDown={e => e.preventDefault()}
       style={{
         marginTop: 4, padding: '5px 6px',
-        background: '#13131a', border: '1px solid #2a2a30', borderRadius: 6,
+        background: 'var(--bg-panel)', border: '1px solid var(--border-ui2)', borderRadius: 6,
         display: 'flex', flexWrap: 'wrap', gap: 3, maxWidth: 320,
         position: 'relative',
       }}
@@ -93,8 +93,8 @@ function IpaKeyboard({ inputRef }) {
           }}
           onMouseLeave={() => setTooltip(null)}
           style={{
-            padding: '2px 6px', borderRadius: 4, border: '1px solid #2e2e3a',
-            background: '#1e1e26', color: '#c8c6c1', fontSize: 12,
+            padding: '2px 6px', borderRadius: 4, border: '1px solid var(--border-surface)',
+            background: 'var(--bg-surface)', color: 'var(--text-dim)', fontSize: 12,
             fontFamily: "'JetBrains Mono',monospace", cursor: 'pointer', lineHeight: 1.4,
           }}
         >
@@ -133,25 +133,25 @@ function IpaTooltip({ symbol, example, anchorRect }) {
         position: 'fixed',
         top: pos.top, left: pos.left,
         opacity: pos.visible ? 1 : 0,
-        background: '#1a1a24',
-        border: '1px solid #3a3a4a',
+        background: 'var(--bg-tooltip)',
+        border: '1px solid var(--border-tooltip)',
         borderRadius: 7,
         padding: '6px 10px',
         pointerEvents: 'none',
         zIndex: 9999,
         minWidth: 80,
-        boxShadow: '0 4px 16px rgba(0,0,0,0.55)',
+        boxShadow: '0 4px 16px var(--shadow-color)',
         display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2,
       }}
     >
       <span style={{
         fontFamily: "'JetBrains Mono',monospace",
-        fontSize: 18, color: '#e8e6e1', lineHeight: 1.2,
+        fontSize: 18, color: 'var(--text)', lineHeight: 1.2,
       }}>
         /{symbol}/
       </span>
       {example && (
-        <span style={{ fontSize: 11, color: '#9a9896', whiteSpace: 'nowrap' }}>
+        <span style={{ fontSize: 11, color: 'var(--text-soft)', whiteSpace: 'nowrap' }}>
           as in "<IpaExample text={example} />"
         </span>
       )}
@@ -188,8 +188,8 @@ function LabelEditorPopover({ editor, onCommit, onClose }) {
         defaultValue={editor.text}
         style={{
           width: editor.boxW,
-          background: '#1e1e26', color: '#e8e6e1',
-          border: '1.5px solid #3a7bd5', borderRadius: 4,
+          background: 'var(--bg-surface)', color: 'var(--text)',
+          border: '1.5px solid var(--accent)', borderRadius: 4,
           padding: '3px 6px', fontSize: 13, fontFamily: 'Inter,sans-serif',
           outline: 'none', textAlign: 'center',
         }}
@@ -300,52 +300,47 @@ function ExportPopover({ defaultName, customTiers, onExport, onClose }) {
   const rowStyle = (active) => ({
     display: 'flex', alignItems: 'flex-start', gap: 8, padding: '7px 10px',
     borderRadius: 5, cursor: 'pointer',
-    background: active ? '#1a1a24' : 'transparent',
-    border: `1px solid ${active ? '#2e2e3a' : 'transparent'}`,
+    background: active ? 'var(--row-active-bg)' : 'transparent',
+    border: `1px solid ${active ? 'var(--border-surface)' : 'transparent'}`,
   });
   const base = (name.trim() || defaultName).replace(/\.TextGrid$/i, '');
   return (
-    <div style={{
-      position: 'absolute', top: '100%', right: 0, marginTop: 4,
-      background: '#1e1e26', border: '1px solid #2e2e3a', borderRadius: 8,
-      padding: '10px 12px', zIndex: 8000, boxShadow: '0 4px 16px rgba(0,0,0,0.6)',
-      display: 'flex', flexDirection: 'column', gap: 8, minWidth: 280,
-    }}>
-      <div style={{ fontSize: 11, color: '#888', fontFamily: 'Inter,sans-serif' }}>Save as</div>
+    <div className="popover-panel" style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: 280 }}>
+      <div style={{ fontSize: 11, color: 'var(--card-label)', fontFamily: 'Inter,sans-serif' }}>Save as</div>
       <input
         autoFocus
         value={name}
         onChange={e => setName(e.target.value)}
         onKeyDown={e => { if (e.key === 'Enter') doExport(); if (e.key === 'Escape') onClose(); }}
         style={{
-          background: '#13131a', color: '#e8e6e1',
-          border: '1px solid #2e2e3a', borderRadius: 4,
+          background: 'var(--bg-panel)', color: 'var(--text)',
+          border: '1px solid var(--border-surface)', borderRadius: 4,
           padding: '5px 8px', fontSize: 12, fontFamily: "'JetBrains Mono',monospace", outline: 'none',
         }}
       />
 
-      <div style={{ fontSize: 11, color: '#888', fontFamily: 'Inter,sans-serif', marginTop: 2 }}>Format</div>
+      <div style={{ fontSize: 11, color: 'var(--card-label)', fontFamily: 'Inter,sans-serif', marginTop: 2 }}>Format</div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
         <label style={rowStyle(mode === 'praat')}>
           <input type="radio" name="export-mode" checked={mode === 'praat'} onChange={() => setMode('praat')}
-            style={{ marginTop: 2, accentColor: '#3a7bd5', flexShrink: 0 }} />
+            style={{ marginTop: 2, accentColor: 'var(--accent)', flexShrink: 0 }} />
           <div>
-            <div style={{ fontSize: 12, color: '#e8e6e1', fontFamily: 'Inter,sans-serif', fontWeight: 500 }}>
+            <div style={{ fontSize: 12, color: 'var(--text)', fontFamily: 'Inter,sans-serif', fontWeight: 500 }}>
               Praat compatible
             </div>
-            <div style={{ fontSize: 10, color: '#6b6a65', fontFamily: 'Inter,sans-serif', marginTop: 1 }}>
+            <div style={{ fontSize: 10, color: 'var(--text-mute)', fontFamily: 'Inter,sans-serif', marginTop: 1 }}>
               WRD + PHN{customTiers.length > 0 ? ` + ${customTiers.map(t => t.name).join(', ')}` : ''} · <em>{base}_praat.TextGrid</em>
             </div>
           </div>
         </label>
         <label style={rowStyle(mode === 'full')}>
           <input type="radio" name="export-mode" checked={mode === 'full'} onChange={() => setMode('full')}
-            style={{ marginTop: 2, accentColor: '#3a7bd5', flexShrink: 0 }} />
+            style={{ marginTop: 2, accentColor: 'var(--accent)', flexShrink: 0 }} />
           <div>
-            <div style={{ fontSize: 12, color: '#e8e6e1', fontFamily: 'Inter,sans-serif', fontWeight: 500 }}>
+            <div style={{ fontSize: 12, color: 'var(--text)', fontFamily: 'Inter,sans-serif', fontWeight: 500 }}>
               Full export
             </div>
-            <div style={{ fontSize: 10, color: '#6b6a65', fontFamily: 'Inter,sans-serif', marginTop: 1 }}>
+            <div style={{ fontSize: 10, color: 'var(--text-mute)', fontFamily: 'Inter,sans-serif', marginTop: 1 }}>
               WRD + PHN{customTiers.length > 0 ? ` + ${customTiers.map(t => t.name).join(', ')}` : ''} · <em>{base}.TextGrid</em>
             </div>
           </div>
@@ -370,12 +365,7 @@ function TierNamePopover({ onAdd, onClose }) {
     onAdd(n);
   };
   return (
-    <div style={{
-      position: 'absolute', top: '100%', right: 0, marginTop: 4,
-      background: '#1e1e26', border: '1px solid #2e2e3a', borderRadius: 8,
-      padding: '10px 12px', zIndex: 8000, boxShadow: '0 4px 16px rgba(0,0,0,0.6)',
-      display: 'flex', gap: 6, alignItems: 'center', minWidth: 200,
-    }}>
+    <div className="popover-panel" style={{ display: 'flex', gap: 6, alignItems: 'center', minWidth: 200 }}>
       <input
         autoFocus
         value={name}
@@ -383,8 +373,8 @@ function TierNamePopover({ onAdd, onClose }) {
         onKeyDown={e => { if (e.key === 'Enter') doAdd(); if (e.key === 'Escape') onClose(); }}
         placeholder="Tier name…"
         style={{
-          flex: 1, background: '#13131a', color: '#e8e6e1',
-          border: '1px solid #2e2e3a', borderRadius: 4,
+          flex: 1, background: 'var(--bg-panel)', color: 'var(--text)',
+          border: '1px solid var(--border-surface)', borderRadius: 4,
           padding: '4px 8px', fontSize: 12, fontFamily: 'Inter,sans-serif', outline: 'none',
         }}
       />
@@ -401,30 +391,25 @@ function FilePicker({ wavs, tgs, onSelect }) {
   const [selWav, setSelWav] = useState(wavs[0]);
   const [selTg,  setSelTg]  = useState(tgs[0] || '');
 
-  const labelStyle = { fontSize: 11, color: '#9a9890', marginBottom: 4 };
+  const labelStyle = { fontSize: 11, color: 'var(--text-soft)', marginBottom: 4 };
   const selectStyle = {
     width: '100%', padding: '6px 8px', borderRadius: 6,
-    background: '#18181c', border: '1px solid #2a2a30',
-    color: '#e8e6e1', fontSize: 13,
+    background: 'var(--bg-ui)', border: '1px solid var(--border-ui2)',
+    color: 'var(--text)', fontSize: 13,
     fontFamily: "'JetBrains Mono', monospace",
   };
 
   return (
-    <div style={{
-      position: 'fixed', inset: 0, zIndex: 9999,
-      background: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(4px)',
-      display: 'flex', alignItems: 'center', justifyContent: 'center',
-    }}>
-      <div style={{
-        background: '#13131a', border: '1px solid #2a2a30', borderRadius: 12,
+    <div className="modal-backdrop" style={{ backdropFilter: 'blur(4px)' }}>
+      <div className="modal-card" style={{
         padding: '28px 32px', minWidth: 380, maxWidth: 480,
         display: 'flex', flexDirection: 'column', gap: 20,
       }}>
-        <div style={{ fontSize: 15, fontWeight: 600, color: '#e8e6e1' }}>
+        <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--text)' }}>
           Select files to load
         </div>
-        <div style={{ fontSize: 12, color: '#9a9890' }}>
-          Multiple files found in <code style={{ color: '#7aacf0' }}>public/</code>. Pick one pair to open.
+        <div style={{ fontSize: 12, color: 'var(--text-soft)' }}>
+          Multiple files found in <code style={{ color: 'var(--accent-soft)' }}>public/</code>. Pick one pair to open.
         </div>
 
         <div>
@@ -446,7 +431,7 @@ function FilePicker({ wavs, tgs, onSelect }) {
           onClick={() => onSelect(selWav, selTg || null)}
           style={{
             marginTop: 4, padding: '8px 0', borderRadius: 7,
-            background: '#3a7bd5', border: 'none', color: '#fff',
+            background: 'var(--accent)', border: 'none', color: '#fff',
             fontSize: 13, fontWeight: 600, cursor: 'pointer',
           }}
         >
@@ -461,8 +446,8 @@ function ConfidenceDashboard({ words }) {
   const scored = words.filter(w => w.score != null).sort((a, b) => a.score - b.score);
   if (scored.length === 0) {
     return (
-      <div style={dashStyle}>
-        <div style={{ color: '#6b6a65', fontSize: 12, padding: 16, textAlign: 'center' }}>
+      <div className="confidence-dashboard">
+        <div style={{ color: 'var(--text-mute)', fontSize: 12, padding: 16, textAlign: 'center' }}>
           No score data in this TextGrid
         </div>
       </div>
@@ -482,16 +467,17 @@ function ConfidenceDashboard({ words }) {
   const low = scored.slice(0, 5);
 
   return (
-    <div style={dashStyle}>
-      <div style={{ fontSize: 11, fontWeight: 600, color: '#e8e6e1', marginBottom: 10, letterSpacing: 0.5 }}>
+    <div className="confidence-dashboard">
+      <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text)', marginBottom: 10, letterSpacing: 0.5 }}>
         CONFIDENCE SCORES
       </div>
 
       {/* Stats */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px 8px', marginBottom: 12 }}>
         {[['Mean', mean], ['Median', median], ['Min', min], ['Max', max]].map(([label, val]) => (
-          <div key={label} style={{ background: '#1e1e26', borderRadius: 4, padding: '4px 6px' }}>
-            <div style={{ fontSize: 9, color: '#6b6a65', fontFamily: "'JetBrains Mono',monospace" }}>{label}</div>
+          <div key={label} style={{ background: 'var(--bg-surface)', borderRadius: 4, padding: '4px 6px' }}>
+            <div style={{ fontSize: 9, color: 'var(--text-mute)', fontFamily: "'JetBrains Mono',monospace" }}>{label}</div>
+            {/* scoreColor() mirrors the frozen canvas confidence-color scale — not theme-aware by design */}
             <div style={{ fontSize: 13, color: scoreColor(val), fontFamily: "'JetBrains Mono',monospace", fontWeight: 600 }}>
               {val.toFixed(3)}
             </div>
@@ -500,7 +486,7 @@ function ConfidenceDashboard({ words }) {
       </div>
 
       {/* Histogram */}
-      <div style={{ fontSize: 9, color: '#6b6a65', fontFamily: "'JetBrains Mono',monospace", marginBottom: 4 }}>
+      <div style={{ fontSize: 9, color: 'var(--text-mute)', fontFamily: "'JetBrains Mono',monospace", marginBottom: 4 }}>
         DISTRIBUTION ({scored.length} words)
       </div>
       <div style={{ display: 'flex', alignItems: 'flex-end', gap: 2, height: 60, marginBottom: 4 }}>
@@ -515,27 +501,27 @@ function ConfidenceDashboard({ words }) {
           );
         })}
       </div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 8, color: '#45454d', fontFamily: "'JetBrains Mono',monospace", marginBottom: 12 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 8, color: 'var(--text-dark)', fontFamily: "'JetBrains Mono',monospace", marginBottom: 12 }}>
         <span>0.0</span><span>0.5</span><span>1.0</span>
       </div>
 
-      {/* Color legend */}
-      <div style={{ fontSize: 9, color: '#6b6a65', fontFamily: "'JetBrains Mono',monospace", marginBottom: 4 }}>LEGEND</div>
+      {/* Color legend — mirrors the frozen canvas confidence-color scale, not theme-aware by design */}
+      <div style={{ fontSize: 9, color: 'var(--text-mute)', fontFamily: "'JetBrains Mono',monospace", marginBottom: 4 }}>LEGEND</div>
       <div style={{
         height: 8, borderRadius: 4, marginBottom: 4,
         background: 'linear-gradient(to right, rgb(255,0,50), rgb(255,200,50), rgb(0,200,50))',
       }} />
-      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 8, color: '#45454d', fontFamily: "'JetBrains Mono',monospace", marginBottom: 14 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 8, color: 'var(--text-dark)', fontFamily: "'JetBrains Mono',monospace", marginBottom: 14 }}>
         <span>Low</span><span>High</span>
       </div>
 
       {/* Low confidence words */}
-      <div style={{ fontSize: 9, color: '#6b6a65', fontFamily: "'JetBrains Mono',monospace", marginBottom: 4 }}>
+      <div style={{ fontSize: 9, color: 'var(--text-mute)', fontFamily: "'JetBrains Mono',monospace", marginBottom: 4 }}>
         LOWEST CONFIDENCE
       </div>
       {low.map(w => (
-        <div key={w.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '3px 0', borderBottom: '1px solid #1e1e24' }}>
-          <span style={{ fontSize: 12, color: '#c8c6c1', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 120 }}>
+        <div key={w.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '3px 0', borderBottom: '1px solid var(--border)' }}>
+          <span style={{ fontSize: 12, color: 'var(--text-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 120 }}>
             {w.text || '<empty>'}
           </span>
           <span style={{ fontSize: 11, fontFamily: "'JetBrains Mono',monospace", color: scoreColor(w.score), flexShrink: 0, marginLeft: 6 }}>
@@ -546,13 +532,6 @@ function ConfidenceDashboard({ words }) {
     </div>
   );
 }
-
-const dashStyle = {
-  width: 200, flexShrink: 0,
-  background: '#13131a', borderLeft: '1px solid #1e1e24',
-  overflowY: 'auto', padding: '14px 12px',
-  fontFamily: 'Inter,system-ui,sans-serif',
-};
 
 export default function App() {
   // ── React state (drives toolbar UI only) ──────────────────────────────
@@ -580,6 +559,10 @@ export default function App() {
   // const [editShortcut, setEditShortcut] = useState('1');
   // const [editingShortcut, setEditingShortcut] = useState(false);
   const [showDashboard, setShowDashboard] = useState(false);
+  // Chrome-only theme (toolbar/panels/popovers) — the waveform/spectrogram/tier canvas is drawn
+  // with its own fixed dark colors in the draw* functions and never reads this. No paired ref:
+  // theme is UI-only, never read inside a draw* function or addInteraction closure.
+  const [theme, setTheme] = useState(() => document.documentElement.getAttribute('data-theme') || 'dark');
   const [playbackRate, setPlaybackRate]   = useState(1);
   const [mfaQueue, setMfaQueue]           = useState([]);      // {id,label,t0,t1,status,error}
   const [mfaError, setMfaError]           = useState(null);   // string | null
@@ -1631,6 +1614,11 @@ export default function App() {
   // ── Effects ───────────────────────────────────────────────────────────
 
   useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+    try { localStorage.setItem('theme', theme); } catch (_) {}
+  }, [theme]);
+
+  useEffect(() => {
     (async () => {
       let manifest;
       try {
@@ -2514,19 +2502,14 @@ export default function App() {
 
       const menu = document.createElement('div');
       menu.id = 'tier-ctx-menu';
-      Object.assign(menu.style, {
-        position: 'fixed', left: e.clientX + 'px', top: e.clientY + 'px',
-        background: '#1e1e26', border: '1px solid #2e2e3a', borderRadius: '6px',
-        padding: '4px 0', zIndex: 9999, minWidth: '160px', boxShadow: '0 4px 16px rgba(0,0,0,0.5)',
-        fontFamily: 'Inter,system-ui,sans-serif', fontSize: '12px', color: '#c8c6c1',
-      });
+      menu.className = 'ctx-menu';
+      menu.style.left = e.clientX + 'px';
+      menu.style.top = e.clientY + 'px';
 
       const menuItem = (label, action) => {
         const el = document.createElement('div');
         el.textContent = label;
-        Object.assign(el.style, { padding: '6px 14px', cursor: 'pointer' });
-        el.addEventListener('mouseenter', () => { el.style.background = '#2e2e3a'; });
-        el.addEventListener('mouseleave', () => { el.style.background = ''; });
+        el.className = 'ctx-menu__item';
         el.addEventListener('mousedown', (ev) => { ev.preventDefault(); menu.remove(); action(); });
         menu.appendChild(el);
       };
@@ -2550,7 +2533,7 @@ export default function App() {
       });
 
       const sep = document.createElement('div');
-      Object.assign(sep.style, { height: '1px', background: '#2e2e3a', margin: '4px 0' });
+      sep.className = 'ctx-menu__sep';
       menu.appendChild(sep);
 
       menuItem('Delete', () => {
@@ -2939,18 +2922,18 @@ export default function App() {
       {setupError && (
         <div style={{
           position: 'fixed', inset: 0, zIndex: 9999,
-          background: '#0f0f11', display: 'flex', flexDirection: 'column',
+          background: 'var(--bg)', display: 'flex', flexDirection: 'column',
           alignItems: 'center', justifyContent: 'center', gap: 16,
         }}>
           <div style={{ fontSize: 36 }}>📂</div>
-          <div style={{ fontSize: 15, fontWeight: 600, color: '#e8e6e1' }}>Setup required</div>
+          <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--text)' }}>Setup required</div>
           {setupError.split('\n').map((line, i) => (
-            <div key={i} style={{ fontSize: 13, color: '#9a9890', maxWidth: 480, textAlign: 'center' }}>{line}</div>
+            <div key={i} style={{ fontSize: 13, color: 'var(--text-soft)', maxWidth: 480, textAlign: 'center' }}>{line}</div>
           ))}
           <div style={{
             marginTop: 8, padding: '10px 18px', borderRadius: 8,
-            background: '#18181c', border: '1px solid #2a2a30',
-            fontFamily: "'JetBrains Mono', monospace", fontSize: 12, color: '#7aacf0',
+            background: 'var(--bg-ui)', border: '1px solid var(--border-ui2)',
+            fontFamily: "'JetBrains Mono', monospace", fontSize: 12, color: 'var(--accent-soft)',
           }}>
             annotation_tool/code/frontend-reactjs/public/
           </div>
@@ -2973,17 +2956,17 @@ export default function App() {
       {memoryWarning && (
         <div style={{
           position: 'fixed', top: 0, left: 0, right: 0, zIndex: 9000,
-          background: '#2a1a08', borderBottom: '1px solid #a07020',
-          color: '#f0b840', fontSize: 12, padding: '7px 16px',
+          background: 'var(--warn-bg)', borderBottom: '1px solid var(--warn-border)',
+          color: 'var(--warn-text)', fontSize: 12, padding: '7px 16px',
           display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12,
         }}>
           <span>
             ⚠ Audio is over 30 minutes — the browser holds the full decoded file in memory.
-            Save frequently with <kbd style={{ background: '#3a2a10', padding: '1px 5px', borderRadius: 3, border: '1px solid #a07020' }}>Ctrl/Cmd+S</kbd> to avoid losing work if the tab runs out of memory.
+            Save frequently with <kbd style={{ background: 'var(--warn-kbd-bg)', padding: '1px 5px', borderRadius: 3, border: '1px solid var(--warn-border)' }}>Ctrl/Cmd+S</kbd> to avoid losing work if the tab runs out of memory.
           </span>
           <button
             onClick={() => setMemoryWarning(false)}
-            style={{ background: 'none', border: 'none', color: '#f0b840', cursor: 'pointer', fontSize: 14, lineHeight: 1, padding: '0 4px' }}
+            style={{ background: 'none', border: 'none', color: 'var(--warn-text)', cursor: 'pointer', fontSize: 14, lineHeight: 1, padding: '0 4px' }}
           >✕</button>
         </div>
       )}
@@ -2999,7 +2982,7 @@ export default function App() {
 
       <div className="toolbar">
         <div className="logo">
-          Gwilliams-Praat Aligner{audioFileName && <span>{audioFileName}</span>}
+          GSA
           {isDirty && !saveState && (
             <span className="save-indicator save-indicator--unsaved">● Unsaved</span>
           )}
@@ -3031,6 +3014,7 @@ export default function App() {
           <div className="time-display" ref={timeDisplayRef}>
             {fmtTime(playheadRef.current)} / {fmtTime(duration)}
           </div>
+          <span className="zoom-label">Playback speed</span>
           <select
             className="colormap-select"
             value={playbackRate}
@@ -3047,7 +3031,7 @@ export default function App() {
             title="Playback speed"
           >
             {[0.25, 0.5, 0.75, 1, 1.25, 1.5, 2].map(r => (
-              <option key={r} value={r}>Playback speed: {r}×</option>
+              <option key={r} value={r}>{r}×</option>
             ))}
           </select>
         </div>
@@ -3135,7 +3119,7 @@ export default function App() {
                     className={`btn btn-mfa${busy ? ' computing' : ''}`}
                     onClick={() => setMfaQueueOpen(v => !v)}
                     title="Show MFA queue"
-                    style={{ borderRadius: '0 6px 6px 0', padding: '0 8px', borderLeft: '1px solid rgba(80,180,80,0.2)' }}
+                    style={{ borderRadius: '0 6px 6px 0', padding: '0 8px', borderLeft: '1px solid rgba(var(--mfa-rgb),0.2)' }}
                   >
                     {queueCount}▾
                   </button>
@@ -3143,33 +3127,28 @@ export default function App() {
               </div>
               {mfaQueueOpen && mfaQueue.length > 0 && (
                 <div
-                  style={{
-                    position: 'absolute', top: '100%', right: 0, marginTop: 4,
-                    background: '#18181c', border: '1px solid #2a2a30', borderRadius: 8,
-                    minWidth: 260, zIndex: 8000, boxShadow: '0 4px 16px rgba(0,0,0,0.6)',
-                    padding: '6px 0',
-                  }}
+                  className="mfa-queue-dropdown"
                   onMouseLeave={() => setMfaQueueOpen(false)}
                 >
                   {mfaQueue.map((job, i) => (
                     <div key={job.id} style={{
                       display: 'flex', alignItems: 'center', gap: 8,
                       padding: '5px 12px',
-                      borderBottom: i < mfaQueue.length - 1 ? '1px solid #1e1e24' : 'none',
+                      borderBottom: i < mfaQueue.length - 1 ? '1px solid var(--border)' : 'none',
                     }}>
-                      <span style={{ fontSize: 11, color: job.status === 'running' ? '#f0c070' : job.status === 'error' ? '#f08080' : '#6b6a65', flexShrink: 0 }}>
+                      <span style={{ fontSize: 11, color: job.status === 'running' ? 'var(--warn-computing)' : job.status === 'error' ? 'var(--error-text)' : 'var(--text-mute)', flexShrink: 0 }}>
                         {job.status === 'running' ? '⟳' : job.status === 'error' ? '✕' : '○'}
                       </span>
-                      <span style={{ flex: 1, fontSize: 11, color: '#c8c6c1', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      <span style={{ flex: 1, fontSize: 11, color: 'var(--text-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         {job.label}
                       </span>
-                      <span style={{ fontSize: 10, fontFamily: "'JetBrains Mono',monospace", color: '#45454d', flexShrink: 0 }}>
+                      <span style={{ fontSize: 10, fontFamily: "'JetBrains Mono',monospace", color: 'var(--text-dark)', flexShrink: 0 }}>
                         {job.segT0.toFixed(1)}–{job.segT1.toFixed(1)}s
                       </span>
                       {(job.status === 'pending' || job.status === 'error') && (
                         <button
                           onClick={() => updateQueue(q => q.filter(j => j.id !== job.id))}
-                          style={{ background: 'none', border: 'none', color: '#45454d', cursor: 'pointer', padding: 0, fontSize: 13, lineHeight: 1, flexShrink: 0 }}
+                          style={{ background: 'none', border: 'none', color: 'var(--text-dark)', cursor: 'pointer', padding: 0, fontSize: 13, lineHeight: 1, flexShrink: 0 }}
                           title="Remove"
                         >×</button>
                       )}
@@ -3240,6 +3219,13 @@ export default function App() {
           📄 Load TextGrid
           <input type="file" accept=".TextGrid,.textgrid" onChange={handleTGFile} />
         </label>
+        <button
+          className="btn"
+          onClick={() => setTheme(t => (t === 'dark' ? 'light' : 'dark'))}
+          title={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+        >
+          {theme === 'dark' ? '🌙' : '☀'}
+        </button>
       </div>
 
       <div style={{ flex: 1, minHeight: 0, display: 'flex', overflow: 'hidden' }}>
@@ -3368,10 +3354,10 @@ export default function App() {
           {/* ── Tier visibility bar — always visible ── */}
           <div style={{
             display: 'flex', alignItems: 'center', gap: 6,
-            padding: '2px 8px', background: '#13131a',
-            borderBottom: '1px solid #1e1e24', flexShrink: 0, height: 22,
+            padding: '2px 8px', background: 'var(--bg-panel)',
+            borderBottom: '1px solid var(--border)', flexShrink: 0, height: 22,
           }}>
-            <span style={{ fontSize: 9, color: '#45454d', fontFamily: "'JetBrains Mono',monospace", marginRight: 4 }}>SHOW</span>
+            <span style={{ fontSize: 9, color: 'var(--text-dark)', fontFamily: "'JetBrains Mono',monospace", marginRight: 4 }}>SHOW</span>
             {[
               { label: 'WRD', visible: wordsVisible, toggle: v => setWordsVisible(v) },
               { label: 'PHN', visible: phonesVisible, toggle: v => setPhonesVisible(v) },
@@ -3391,7 +3377,7 @@ export default function App() {
                   checked={visible}
                   onChange={e => toggle(e.target.checked)}
                 />
-                <span style={{ fontSize: 9, fontFamily: "'JetBrains Mono',monospace", color: visible ? '#c8c6c1' : '#45454d' }}>{label}</span>
+                <span style={{ fontSize: 9, fontFamily: "'JetBrains Mono',monospace", color: visible ? 'var(--text-dim)' : 'var(--text-dark)' }}>{label}</span>
               </label>
             ))}
             <span style={{ marginLeft: 'auto' }}>
@@ -3402,15 +3388,19 @@ export default function App() {
                   checked={autoPlayTile}
                   onChange={e => { autoPlayTileRef.current = e.target.checked; setAutoPlayTile(e.target.checked); }}
                 />
-                <span style={{ fontSize: 9, fontFamily: "'JetBrains Mono',monospace", color: autoPlayTile ? '#c8c6c1' : '#45454d' }}>AUTO-PLAY</span>
+                <span style={{ fontSize: 9, fontFamily: "'JetBrains Mono',monospace", color: autoPlayTile ? 'var(--text-dim)' : 'var(--text-dark)' }}>AUTO-PLAY</span>
               </label>
             </span>
           </div>
 
-          <div className="tier" ref={wrdTierRef} style={{
-            ...(wordsVisible ? {} : { display: 'none' }),
-            ...(selectedTierIds.has('words') ? { outline: '1.5px solid rgba(58,123,213,0.7)', outlineOffset: '-1px' } : {}),
-          }}>
+          <div
+            className={`tier${selectedTierIds.has('words') ? ' tier--selected' : ''}`}
+            ref={wrdTierRef}
+            style={{
+              ...(wordsVisible ? {} : { display: 'none' }),
+              ...(selectedTierIds.has('words') ? { '--outline-color': 'rgba(58,123,213,0.7)', outlineOffset: '-1px' } : {}),
+            }}
+          >
             <div className="tier-gutter"><span>WRD</span></div>
             <canvas ref={wordsCanvasRef} />
           </div>
@@ -3431,10 +3421,14 @@ export default function App() {
               }
             )}
           />
-          <div className="tier" ref={phnTierRef} style={{
-            ...(phonesVisible ? {} : { display: 'none' }),
-            ...(selectedTierIds.has('phones') ? { outline: '1.5px solid rgba(60,200,130,0.7)', outlineOffset: '-1px' } : {}),
-          }}>
+          <div
+            className={`tier${selectedTierIds.has('phones') ? ' tier--selected' : ''}`}
+            ref={phnTierRef}
+            style={{
+              ...(phonesVisible ? {} : { display: 'none' }),
+              ...(selectedTierIds.has('phones') ? { '--outline-color': 'rgba(60,200,130,0.7)', outlineOffset: '-1px' } : {}),
+            }}
+          >
             <div className="tier-gutter"><span>PHN</span></div>
             <canvas ref={phonesCanvasRef} />
           </div>
@@ -3464,14 +3458,14 @@ export default function App() {
                   )}
                 />
                 <div
-                  className="tier"
+                  className={`tier${selectedTierIds.has(tier.id) ? ' tier--selected' : ''}`}
                   ref={el => {
                     if (el) customTierDivRefs.current[tier.id] = el;
                     else delete customTierDivRefs.current[tier.id];
                   }}
                   style={{
                     ...(tier.visible ? {} : { display: 'none' }),
-                    ...(selectedTierIds.has(tier.id) ? { outline: '1.5px solid rgba(60,200,130,0.7)', outlineOffset: '-1px' } : {}),
+                    ...(selectedTierIds.has(tier.id) ? { '--outline-color': 'rgba(60,200,130,0.7)', outlineOffset: '-1px' } : {}),
                   }}
                 >
                   <div className="tier-gutter" style={{ flexDirection: 'column', gap: 2 }}>
@@ -3545,8 +3539,8 @@ export default function App() {
       <div className={`token-popup${popup ? ' show' : ''}`} style={popup ? { left: popup.left, top: popup.top } : {}}>
         {popup && (
           <>
-            <div style={{ fontSize: 19, fontWeight: 600, color: '#e8e6e1', letterSpacing: '-0.3px' }}>{popup.text}</div>
-            <div style={{ fontSize: 10, fontFamily: "'JetBrains Mono',monospace", color: '#6b6a65', marginTop: 4 }}>
+            <div style={{ fontSize: 19, fontWeight: 600, color: 'var(--text)', letterSpacing: '-0.3px' }}>{popup.text}</div>
+            <div style={{ fontSize: 10, fontFamily: "'JetBrains Mono',monospace", color: 'var(--text-mute)', marginTop: 4 }}>
               {popup.t0.toFixed(3)}s – {popup.t1.toFixed(3)}s &nbsp;·&nbsp; {popup.dur}ms
             </div>
           </>
@@ -3555,13 +3549,11 @@ export default function App() {
 
       {/* ── MFA error toast ──────────────────────────────────────────────── */}
       {mfaError && (
-        <div style={{
-          position: 'fixed', bottom: 16, right: 16, zIndex: 8000,
-          background: '#2a1010', border: '1px solid #a03030', borderRadius: 7,
-          padding: '7px 10px 7px 12px', maxWidth: 380,
-          fontFamily: 'Inter,system-ui,sans-serif', fontSize: 11, color: '#f08080',
+        <div className="toast toast--error" style={{
+          position: 'fixed', bottom: 16, right: 16,
+          padding: '7px 10px 7px 12px',
+          fontFamily: 'Inter,system-ui,sans-serif',
           display: 'flex', alignItems: 'flex-start', gap: 8,
-          boxShadow: '0 4px 16px rgba(0,0,0,0.5)',
         }}>
           <span style={{ flexShrink: 0 }}>⚠</span>
           <span style={{ flex: 1, whiteSpace: 'pre-wrap', wordBreak: 'break-word', lineHeight: 1.5 }}>
@@ -3569,7 +3561,7 @@ export default function App() {
           </span>
           <button
             onClick={() => setMfaError(null)}
-            style={{ background: 'none', border: 'none', color: '#f08080', cursor: 'pointer', fontSize: 14, padding: '0 0 0 4px', flexShrink: 0, lineHeight: 1, alignSelf: 'flex-start' }}
+            style={{ background: 'none', border: 'none', color: 'var(--error-text)', cursor: 'pointer', fontSize: 14, padding: '0 0 0 4px', flexShrink: 0, lineHeight: 1, alignSelf: 'flex-start' }}
             title="Dismiss"
           >×</button>
         </div>
@@ -3577,13 +3569,11 @@ export default function App() {
 
       {/* ── MFA OOV warning toast ────────────────────────────────────────── */}
       {mfaWarning && (
-        <div style={{
-          position: 'fixed', bottom: mfaError ? 72 : 16, right: 16, zIndex: 8000,
-          background: '#221a08', border: '1px solid #a07020', borderRadius: 7,
-          padding: '7px 10px 7px 12px', maxWidth: 380,
-          fontFamily: 'Inter,system-ui,sans-serif', fontSize: 11, color: '#f0b840',
+        <div className="toast toast--warn" style={{
+          position: 'fixed', bottom: mfaError ? 72 : 16, right: 16,
+          padding: '7px 10px 7px 12px',
+          fontFamily: 'Inter,system-ui,sans-serif',
           display: 'flex', alignItems: 'flex-start', gap: 8,
-          boxShadow: '0 4px 16px rgba(0,0,0,0.5)',
         }}>
           <span style={{ flexShrink: 0 }}>⚠</span>
           <span style={{ flex: 1, whiteSpace: 'pre-wrap', wordBreak: 'break-word', lineHeight: 1.5 }}>
@@ -3591,7 +3581,7 @@ export default function App() {
           </span>
           <button
             onClick={() => setMfaWarning(null)}
-            style={{ background: 'none', border: 'none', color: '#f0b840', cursor: 'pointer', fontSize: 14, padding: '0 0 0 4px', flexShrink: 0, lineHeight: 1, alignSelf: 'flex-start' }}
+            style={{ background: 'none', border: 'none', color: 'var(--warn-text)', cursor: 'pointer', fontSize: 14, padding: '0 0 0 4px', flexShrink: 0, lineHeight: 1, alignSelf: 'flex-start' }}
             title="Dismiss"
           >×</button>
         </div>
@@ -3600,23 +3590,17 @@ export default function App() {
       {/* ── MFA word-picker modal (shown when words overlap in the selection) */}
       {mfaWordPicker && (
         <div
-          style={{
-            position: 'fixed', inset: 0, zIndex: 9000,
-            background: 'rgba(0,0,0,0.65)', display: 'flex',
-            alignItems: 'center', justifyContent: 'center',
-          }}
+          className="modal-backdrop"
           onClick={(e) => { if (e.target === e.currentTarget) setMfaWordPicker(null); }}
         >
-          <div style={{
-            background: '#1e1e26', border: '1px solid #2e2e3a', borderRadius: 10,
+          <div className="modal-card" style={{
             padding: '20px 24px', minWidth: 340, maxWidth: 500,
-            boxShadow: '0 8px 32px rgba(0,0,0,0.7)',
             fontFamily: 'Inter,system-ui,sans-serif',
           }}>
-            <div style={{ fontSize: 13, fontWeight: 600, color: '#e8e6e1', marginBottom: 6 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)', marginBottom: 6 }}>
               Overlapping words in selection
             </div>
-            <div style={{ fontSize: 11, color: '#6b6a65', marginBottom: 16, lineHeight: 1.5 }}>
+            <div style={{ fontSize: 11, color: 'var(--text-mute)', marginBottom: 16, lineHeight: 1.5 }}>
               Multiple words overlap in this region. Select which word(s) to align with MFA,
               or click "All" to align them together.
             </div>
@@ -3630,18 +3614,18 @@ export default function App() {
                     runMfaForWords([w]);
                   }}
                   style={{
-                    background: '#13131a', border: '1px solid #2e2e3a', borderRadius: 6,
-                    padding: '8px 12px', color: '#c8c6c1', fontSize: 12,
+                    background: 'var(--bg-panel)', border: '1px solid var(--border-surface)', borderRadius: 6,
+                    padding: '8px 12px', color: 'var(--text-dim)', fontSize: 12,
                     fontFamily: 'Inter,system-ui,sans-serif', cursor: 'pointer',
                     textAlign: 'left', display: 'flex', justifyContent: 'space-between',
                     alignItems: 'center',
                   }}
-                  onMouseEnter={e => e.currentTarget.style.background = '#2e2e3a'}
-                  onMouseLeave={e => e.currentTarget.style.background = '#13131a'}
+                  onMouseEnter={e => e.currentTarget.style.background = 'var(--border-surface)'}
+                  onMouseLeave={e => e.currentTarget.style.background = 'var(--bg-panel)'}
                 >
                   <span style={{ fontWeight: 600, fontSize: 13 }}>{w.text || '<empty>'}</span>
                   <span style={{
-                    fontSize: 10, fontFamily: "'JetBrains Mono',monospace", color: '#6b6a65',
+                    fontSize: 10, fontFamily: "'JetBrains Mono',monospace", color: 'var(--text-mute)',
                   }}>
                     {w.t0.toFixed(3)}s – {w.t1.toFixed(3)}s
                   </span>

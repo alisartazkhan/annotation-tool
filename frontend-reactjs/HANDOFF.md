@@ -775,15 +775,24 @@ The edit mode hotkey is hardcoded to `1` in the keydown handler. The check match
 
 ## CSS
 
-`index.css` uses CSS custom properties defined in `:root` at the top of the file:
+`index.css` uses CSS custom properties defined in `:root` at the top of the file, expanded considerably by the theming work below:
 
 ```css
 :root {
   --bg, --bg-panel, --bg-ui, --bg-item  /* background layers */
   --border, --border-ui, --border-ui2   /* border colors */
   --text, --text-dim, --text-mute, --text-dark  /* text tones */
-  --accent                              /* #3a7bd5 blue */
+  --accent, --accent-hover, --accent-soft, --accent-strong, --accent-rgb
+  --btn-bg, --btn-border (+ -hover variants)      /* generic .btn chrome */
+  --bg-surface, --border-surface, --bg-deep       /* popover/modal/menu/strip surfaces */
+  --bg-tooltip, --border-tooltip, --text-soft     /* tooltips, secondary text */
+  --shadow-color, --backdrop                      /* box-shadow / modal scrim */
+  --hint-bar-bg, --hint-bar-border, --hint-sep, --kbd-*   /* edit-mode hint bar */
+  --card-*, --toggle-track-*                      /* formant-card / spectrogram overlay HUD */
+  --warn-*, --error-*, --save-*                   /* status-color families (keep hue across themes) */
+  --mfa-*, --export-*, --tier-*                   /* semantic button families (keep hue across themes) */
   --mono                                /* "JetBrains Mono", monospace */
+  --toolbar-btn-h                       /* 34px */
 }
 ```
 
@@ -796,6 +805,13 @@ Notable component classes:
 | `.save-indicator` | Inline save status in logo bar |
 | `.save-indicator--unsaved` | Amber — unsaved changes present |
 | `.save-indicator--saving/saved/error` | Blue/green/red state variants |
+| `.ctx-menu` / `__item` / `__sep` | Tier right-click context menu (built via `document.createElement`, see Theming below) |
+| `.popover-panel` | Shared shell for `ExportPopover`/`TierNamePopover` |
+| `.modal-backdrop` / `.modal-card` | Shared shell for `FilePicker` and the MFA word-picker modal |
+| `.toast` / `--error` / `--warn` | Fixed-position dismissable toasts (MFA error/OOV warning) |
+| `.mfa-queue-dropdown` | MFA queue-count dropdown panel |
+| `.tier--selected` | Selected-tier outline glow — color supplied via the `--outline-color` inline custom property, not a hardcoded per-tier value |
+| `.confidence-dashboard` | `ConfidenceDashboard` sidebar chrome |
 
 `.panel-divider` and `.tier-divider` share one rule. `.panel-gutter` and `.tier-gutter` share a base rule; `.tier-gutter` adds `flex-direction: column; gap: 3px`.
 
@@ -805,9 +821,52 @@ Every button/control inside `.toolbar` (`.btn`, `.load-btn`, `.btn-edit-split`, 
 
 These rules are scoped with a `.toolbar` ancestor selector (`.toolbar .btn`, not bare `.btn`) so they don't affect the same class names reused in popovers/modals (Export popover, Tier-name popover, MFA word-picker modal), which are deliberately more compact. If you add a new toolbar control, give it one of the classes above (or add it to the scoped rule) rather than hand-tuning its padding — that's what caused the original height mismatch (no button class set an explicit `height`; each one's rendered height was just whatever `padding + font-size + border` happened to add up to).
 
+**`.zoom-label`** (despite the name) is the shared convention for a small muted inline label placed before a compact toolbar control — used for both `ZOOM` (before the zoom slider) and `Playback speed` (before the playback-rate `<select>`). Prefer it over repeating the label text inside every `<option>` (the old playback-speed dropdown did this — `Playback speed: 1×`, `Playback speed: 1.25×`, etc. — which made the closed `<select>` itself wide and repetitive; the label was pulled out into its own span and the options trimmed to just `1×`, `1.25×`, ...).
+
+### Theming (light/dark mode) — chrome only
+
+The toolbar, panels, popovers, modals, and toasts support light/dark theming. **The waveform/spectrogram/tier-annotation canvas is permanently dark and is never touched by this** — it's a data-visualization surface (confidence-score gradient, spectrogram colormaps) tuned for a dark background, deliberately out of scope.
+
+**Mechanism**: a `data-theme="dark"|"light"` attribute on `<html>` (not a wrapper div — see why below), driven by React state in `App()`:
+```js
+const [theme, setTheme] = useState(() => document.documentElement.getAttribute('data-theme') || 'dark');
+useEffect(() => {
+  document.documentElement.setAttribute('data-theme', theme);
+  try { localStorage.setItem('theme', theme); } catch (_) {}
+}, [theme]);
+```
+No paired ref — `theme` is UI-only, never read inside a `draw*` function or an `addInteraction`/`addTierEditInteraction` closure, so the usual dual state+ref rule doesn't apply (same category as `showDashboard`/`mfaQueueOpen`). The toggle button is the last child of `.toolbar` (a plain `.btn`, 🌙/☀), so it inherits the toolbar-height-normalization rules above for free.
+
+**`data-theme` must live on `<html>`, not a div inside `#root`.** The tier right-click context menu (`onContextMenu`, `App.jsx`) is built via `document.createElement` and appended straight to `document.body` — a sibling of `#root`. Only `<html>`-level scoping puts it inside the themed subtree so its `.ctx-menu*` classes pick up the CSS variables. This is also why the menu was migrated from imperative `Object.assign(el.style, {...})` + JS `mouseenter`/`mouseleave` listeners to plain CSS classes with a `:hover` rule — inline styles can't reference `var(--...)` from outside the component that set them, but class-based CSS on a `document.body`-appended node still cascades correctly once `data-theme` is on `<html>`.
+
+**Persistence**: `localStorage.getItem/setItem('theme')` — the first use of `localStorage` in this codebase. **Default is always `'dark'`** on first-ever load; `prefers-color-scheme` is deliberately not consulted, so existing users see no change until they opt in.
+
+**FOUC prevention**: `index.html` has a synchronous inline `<script>` right after `<meta charset>` (must stay first) that reads `localStorage` and sets `data-theme` on `<html>` before first paint:
+```html
+<script>
+  (function () {
+    try {
+      var v = localStorage.getItem('theme');
+      document.documentElement.setAttribute('data-theme', (v === 'light' || v === 'dark') ? v : 'dark');
+    } catch (e) { document.documentElement.setAttribute('data-theme', 'dark'); }
+  })();
+</script>
+```
+This must stay in `index.html`, not move into a React effect — React can't run before its own bundle loads and hydrates, so any React-side theme application would flash the wrong theme first on every load. The `useState` initializer above reads the same `data-theme` attribute this script already set (not `localStorage` again independently), so there's no way for the two to disagree on first render.
+
+**Token conventions**: generic surface/text tokens (`--bg-surface`, `--border-surface`, `--bg-tooltip`, `--text-soft`, `--accent-rgb` for `rgba(var(--accent-rgb), alpha)` blends) extend the pre-existing `:root` convention. Semantic brand-color families — `--mfa-*` (green), `--export-*` (green), `--tier-*` (blue), `--warn-*`/`--error-*`/`--save-*` (status colors) — get their **own** light-mode-adjusted values rather than being swept into the generic tokens, since they need to keep their hue meaning in both themes. Literal `#fff`/`#000` is left alone (not tokenized) wherever text is contrast-matched to a *fixed* accent color rather than to the page background (e.g. white text on the always-blue Play button) — correct in both themes by construction.
+
+**Frozen-dark boundary — do not add theme awareness to any of these**: every `draw*` function in `App.jsx` (`drawPlayheadLine`, `drawSelectionRect`, `drawWave`, `drawSpec`, `drawFreqAxis`, `drawRuler`, `drawTier`, `drawMinimap`, `drawScrollbar`, `drawOverlay`, `drawSnapGuide`), `src/dsp.js`, `src/specWorker.js`, `src/formantWorker.js` (dead code, but still off-limits), `scoreColor()` and every call site (tile fills, `ConfidenceDashboard`'s stat values/histogram/lowest-confidence rows), and `ConfidenceDashboard`'s hardcoded gradient legend (mirrors the frozen canvas confidence scale). The colormap→label-color table inside `drawSpec` (jet=black/inferno=white/viridis=white/greys=black) is about legibility against each *spectrogram colormap*, not the app theme — leave it alone too.
+
+**In scope despite sitting next to canvases**: `.minimap`/`.scrollbar-strip`/`*-gutter` div backgrounds (these are DOM chrome behind/beside the canvas, not `fillStyle` calls) and the `.formant-card`/`.spec-overlay-btns`/`.calc-spec-btn` floating HUD (DOM elements layered over the spectrogram via `backdrop-filter`, not canvas draw calls) — in light mode these render as a light, translucent card floating over the still-dark spectrogram underneath, which is intentional.
+
 ---
 
 ## Key Invariants and Non-Obvious Constraints
+
+- **`data-theme` must live on `<html>`, never a wrapper div inside `#root`.** The tier context menu is appended straight to `document.body`, a sibling of `#root` — only `<html>`-level scoping puts it inside the themed subtree.
+
+- **Canvas draw functions, `dsp.js`, `specWorker.js`, and `scoreColor()` must never become theme-aware.** They're permanently dark by design (see "Theming" under CSS). If you touch color logic in a `draw*` function while working on something else, that's a sign you've wandered outside the intended scope of the theming system — check the frozen-dark boundary list before proceeding.
 
 - **`setupCanvas` must be called at the start of every draw function.** It resets the transform.
 
@@ -908,6 +967,7 @@ When `/api/public-files` returns more than one `.wav` or `.TextGrid`, the app re
 - Two `<select>` dropdowns — one for wav, one for TextGrid (includes a "— none —" option).
 - On confirm calls `onSelect(wavName, tgName | null)` which calls `loadPublicPair`.
 - `loadPublicPair(wavName, tgName)` — `useCallback` that fetches both files from `public/`, calls `loadTextGrid` + `loadAudio`, and sets `publicWavFileRef` / `audioFileName`. This is also used by the single-file auto-load path.
+  - `audioFileName` is no longer displayed anywhere (it used to show next to the app name in the toolbar logo, e.g. "GSA  audio" for a file named `audio.wav`) — that span was removed to declutter the toolbar. The state is still set on every load and may be worth deleting outright if nothing picks it up again.
 
 ---
 
