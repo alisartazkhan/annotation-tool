@@ -12,6 +12,7 @@
   --text-dark: #45454d;
   --accent:    #3a7bd5;
   --mono:      "JetBrains Mono", monospace;
+  --toolbar-btn-h: 34px;
 }
 
 *, *::before, *::after { box-sizing: border-box; }
@@ -87,6 +88,30 @@ html, body {
 }
 .load-btn:hover { background: #3d3d48; color: #fff; }
 .load-btn input { display: none; }
+
+/* ── Toolbar buttons: normalize every button/control in the main toolbar to one height ── */
+.toolbar .btn,
+.toolbar .load-btn,
+.toolbar .btn-edit-split,
+.toolbar .colormap-select {
+  height: var(--toolbar-btn-h);
+}
+.toolbar .btn,
+.toolbar .load-btn {
+  display: flex; align-items: center; justify-content: center;
+  padding: 0 15px;
+}
+.toolbar .btn-edit-split__main {
+  display: flex; align-items: center; justify-content: center;
+  padding: 0 13px;
+}
+.toolbar .btn-edit-split__badge {
+  display: flex; align-items: center; justify-content: center;
+  padding: 0 8px;
+}
+.toolbar .colormap-select {
+  padding: 0 8px;
+}
 
 /* ── Timeline ── */
 .timeline {

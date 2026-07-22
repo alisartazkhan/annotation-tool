@@ -3130,7 +3130,7 @@ export default function App() {
                     className={`btn btn-mfa${busy ? ' computing' : ''}`}
                     onClick={() => setMfaQueueOpen(v => !v)}
                     title="Show MFA queue"
-                    style={{ borderRadius: '0 6px 6px 0', padding: '5px 8px', borderLeft: '1px solid rgba(80,180,80,0.2)' }}
+                    style={{ borderRadius: '0 6px 6px 0', padding: '0 8px', borderLeft: '1px solid rgba(80,180,80,0.2)' }}
                   >
                     {queueCount}▾
                   </button>
