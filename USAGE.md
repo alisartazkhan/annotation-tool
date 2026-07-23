@@ -117,8 +117,11 @@ Click **↓ Export** to download the annotations as a file. Two format options:
 | `Ctrl/Cmd+S` | Save TextGrid to disk (dev only) |
 | `Ctrl/Cmd+Z` | Undo |
 | `Ctrl/Cmd+Y` | Redo |
+| `Ctrl/Cmd+C` | Copy selected tile's label (edit mode, requires a selection) |
+| `Ctrl/Cmd+V` | Paste copied label onto all selected tiles (edit mode, requires a selection) |
 | `⌫` / `Delete` | Delete selected tile(s) (edit mode) |
-| `Ctrl/Cmd+click` | Add/remove tile from multi-selection (edit mode) |
+| `Shift+click` | Range-select tiles from the last-selected tile to the clicked tile (edit mode) |
+| `Ctrl/Cmd+click` (or drag) | Range-select tiles — same as `Shift+click` (edit mode) |
 | `←` / `→` | Pan view by 20% |
 
-> A dedicated keyboard-shortcut reference menu is planned — for now this table is the source of truth.
+> These shortcuts are also available in-app: click the **GSA** logo in the top-left of the toolbar to open the keyboard-shortcuts reference at any time.

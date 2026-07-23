@@ -442,6 +442,72 @@ function FilePicker({ wavs, tgs, onSelect }) {
   );
 }
 
+const SHORTCUTS = [
+  { keys: ['Space'], desc: 'Play / pause' },
+  { keys: ['L'], desc: 'Toggle loop' },
+  { keys: ['F'], desc: 'Fit full duration in view' },
+  { keys: ['Home'], desc: 'Reset view to the first 20 seconds' },
+  { keys: ['1'], desc: 'Toggle edit mode (on by default)' },
+  { keys: ['←', '→'], desc: 'Pan the view by 20% of the current span' },
+  { keys: ['Ctrl/Cmd+S'], desc: 'Save the TextGrid to disk (dev only)' },
+  { keys: ['Ctrl/Cmd+Z'], desc: 'Undo' },
+  { keys: ['Ctrl/Cmd+Y'], desc: 'Redo' },
+  { keys: ['Ctrl/Cmd+C'], desc: "Copy the selected tile's label (edit mode, requires a selection)" },
+  { keys: ['Ctrl/Cmd+V'], desc: 'Paste the copied label onto all selected tiles (edit mode, requires a selection)' },
+  { keys: ['⌫', 'Delete'], desc: 'Delete the selected tile(s) (edit mode, requires a selection)' },
+  { keys: ['Shift'], suffix: '+click', desc: 'Range-select tiles from the last-selected tile to the clicked tile (edit mode)' },
+  { keys: ['Ctrl/Cmd'], suffix: '+click (or drag)', desc: 'Same range-select as Shift+click (edit mode)' },
+];
+
+function ShortcutsModal({ onClose }) {
+  return (
+    <div className="modal-backdrop" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="modal-card shortcuts-modal" style={{
+        padding: '28px 32px', minWidth: 460, maxWidth: 600, maxHeight: '85vh', overflowY: 'auto',
+        fontFamily: 'Inter,system-ui,sans-serif',
+      }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 12 }}>
+          <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--text)' }}>
+            Welcome to the GLySN Speech Annotator (GSA)
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            style={{ background: 'none', border: 'none', color: 'var(--text-mute)', cursor: 'pointer', fontSize: 14, lineHeight: 1, padding: '0 0 0 4px', flexShrink: 0 }}
+          >✕</button>
+        </div>
+
+        <div style={{ fontSize: 12, color: 'var(--text-soft)', lineHeight: 1.5, marginBottom: 20 }}>
+          We hope you find this tool useful for generating and revising word- and phoneme-level
+          annotations of speech. Before you get started, here are some helpful keyboard shortcuts
+          you should know about:
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: '150px 1fr', fontSize: 12 }}>
+          <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-mute)', letterSpacing: 0.5, padding: '0 8px 6px' }}>SHORTCUT</div>
+          <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-mute)', letterSpacing: 0.5, padding: '0 8px 6px' }}>ACTION</div>
+          {SHORTCUTS.map((row, i) => (
+            <React.Fragment key={i}>
+              <div style={{ padding: '6px 8px', background: i % 2 ? 'var(--bg-panel)' : 'transparent', display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 4 }}>
+                {row.keys.map((k, j) => (
+                  <React.Fragment key={j}>
+                    {j > 0 && <span style={{ color: 'var(--text-mute)' }}>/</span>}
+                    <kbd>{k}</kbd>
+                  </React.Fragment>
+                ))}
+                {row.suffix && <span style={{ color: 'var(--text-dim)' }}>{row.suffix}</span>}
+              </div>
+              <div style={{ padding: '6px 8px', background: i % 2 ? 'var(--bg-panel)' : 'transparent', color: 'var(--text-dim)', display: 'flex', alignItems: 'center' }}>
+                {row.desc}
+              </div>
+            </React.Fragment>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ConfidenceDashboard({ words }) {
   const scored = words.filter(w => w.score != null).sort((a, b) => a.score - b.score);
   if (scored.length === 0) {
@@ -559,10 +625,12 @@ export default function App() {
   // const [editShortcut, setEditShortcut] = useState('1');
   // const [editingShortcut, setEditingShortcut] = useState(false);
   const [showDashboard, setShowDashboard] = useState(false);
-  // Chrome-only theme (toolbar/panels/popovers) — the waveform/spectrogram/tier canvas is drawn
-  // with its own fixed dark colors in the draw* functions and never reads this. No paired ref:
-  // theme is UI-only, never read inside a draw* function or addInteraction closure.
+  const [showShortcutsModal, setShowShortcutsModal] = useState(false);
+  // Chrome-only theme (toolbar/panels/popovers). drawWave/drawTier also read themeRef for their
+  // background fill (see themeRef below) so the plot backgrounds match the light-theme panel bg;
+  // all other canvas colors (waveform stroke, spectrogram, confidence coloring) stay frozen dark.
   const [theme, setTheme] = useState(() => document.documentElement.getAttribute('data-theme') || 'dark');
+  const themeRef = useRef(theme);
   const [playbackRate, setPlaybackRate]   = useState(1);
   const [mfaQueue, setMfaQueue]           = useState([]);      // {id,label,t0,t1,status,error}
   const [mfaError, setMfaError]           = useState(null);   // string | null
@@ -814,7 +882,7 @@ export default function App() {
     const { ctx, w, h } = s;
     const { t0, t1 } = viewRef.current;
     const DUR = durationRef.current;
-    ctx.fillStyle = '#0d0d10'; ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = themeRef.current === 'light' ? '#ffffff' : '#0d0d10'; ctx.fillRect(0, 0, w, h);
     drawSelectionRect(ctx, w, h, 0.15);
     const mid = h / 2;
 
@@ -1052,7 +1120,7 @@ export default function App() {
     if (!s) return;
     const { ctx, w, h } = s;
     const { t0, t1 } = viewRef.current;
-    ctx.fillStyle = '#13131a'; ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = themeRef.current === 'light' ? '#ffffff' : '#13131a'; ctx.fillRect(0, 0, w, h);
     const sel = selectionRef.current;
     if (sel) {
       const sx = tX(sel.t0, w), ex = tX(sel.t1, w);
@@ -1109,7 +1177,7 @@ export default function App() {
       if (bw > 8) {
         ctx.save();
         ctx.beginPath(); ctx.rect(x0 + 1, ry, bw - 2, rowH); ctx.clip();
-        ctx.fillStyle = '#c8c6c1'; ctx.font = font; ctx.textAlign = 'center';
+        ctx.fillStyle = themeRef.current === 'light' ? '#1c1c20' : '#c8c6c1'; ctx.font = font; ctx.textAlign = 'center';
         ctx.fillText(item.text, (x0 + x1) / 2, ry + rowH / 2 + fontSize * 0.35);
         ctx.restore();
       }
@@ -1123,13 +1191,14 @@ export default function App() {
     const { ctx, w, h } = s;
     const DUR = durationRef.current;
     const { t0, t1 } = viewRef.current;
-    ctx.fillStyle = '#0c0c0f'; ctx.fillRect(0, 0, w, h);
+    const isLight = themeRef.current === 'light';
+    ctx.fillStyle = isLight ? '#ffffff' : '#0c0c0f'; ctx.fillRect(0, 0, w, h);
     for (const wd of wordsRef.current) {
       ctx.fillStyle = wd.score != null ? scoreColor(wd.score, 0.55) : 'rgba(58,123,213,0.3)';
       ctx.fillRect((wd.t0 / DUR) * w, 3, Math.max(1, ((wd.t1 - wd.t0) / DUR) * w), h - 6);
     }
     const vx0 = (t0 / DUR) * w, vx1 = (t1 / DUR) * w;
-    ctx.fillStyle = 'rgba(255,255,255,0.06)'; ctx.fillRect(vx0, 0, vx1 - vx0, h);
+    ctx.fillStyle = isLight ? 'rgba(0,0,0,0.06)' : 'rgba(255,255,255,0.06)'; ctx.fillRect(vx0, 0, vx1 - vx0, h);
     ctx.strokeStyle = '#45454d'; ctx.lineWidth = 1;
     ctx.strokeRect(vx0 + 0.5, 0.5, vx1 - vx0 - 1, h - 1);
     const px = (playheadRef.current / DUR) * w;
@@ -1143,7 +1212,7 @@ export default function App() {
     const { ctx, w, h } = s;
     const DUR = durationRef.current;
     const { t0, t1 } = viewRef.current;
-    ctx.fillStyle = '#0c0c0f'; ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = themeRef.current === 'light' ? '#ffffff' : '#0c0c0f'; ctx.fillRect(0, 0, w, h);
     if (!DUR) return;
     const vx0 = (t0 / DUR) * w, vx1 = (t1 / DUR) * w;
     ctx.fillStyle = '#3a3a42';
@@ -1616,7 +1685,9 @@ export default function App() {
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
     try { localStorage.setItem('theme', theme); } catch (_) {}
-  }, [theme]);
+    themeRef.current = theme;
+    redraw();
+  }, [theme, redraw]);
 
   useEffect(() => {
     (async () => {
@@ -2982,7 +3053,14 @@ export default function App() {
 
       <div className="toolbar">
         <div className="logo">
-          GSA
+          <button
+            type="button"
+            className="logo-btn"
+            onClick={() => setShowShortcutsModal(true)}
+            title="Keyboard shortcuts"
+          >
+            GSA
+          </button>
           {isDirty && !saveState && (
             <span className="save-indicator save-indicator--unsaved">● Unsaved</span>
           )}
@@ -3160,7 +3238,7 @@ export default function App() {
           );
         })()}
         <button
-          className="btn"
+          className="btn btn-undo-redo"
           onClick={() => { popUndo(); redraw(); }}
           disabled={undoStackRef.current.length === 0}
           title="Undo (Ctrl/Cmd+Z)"
@@ -3168,7 +3246,7 @@ export default function App() {
           ↶
         </button>
         <button
-          className="btn"
+          className="btn btn-undo-redo"
           onClick={() => { popRedo(); redraw(); }}
           disabled={redoCount === 0}
           title="Redo (Ctrl/Cmd+Y)"
@@ -3653,6 +3731,10 @@ export default function App() {
             </div>
           </div>
         </div>
+      )}
+
+      {showShortcutsModal && (
+        <ShortcutsModal onClose={() => setShowShortcutsModal(false)} />
       )}
 
     </>
