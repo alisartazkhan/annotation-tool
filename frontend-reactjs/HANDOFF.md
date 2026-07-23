@@ -41,6 +41,7 @@ src/
   formantWorker.js    UNUSED — superseded by dsp_server.py; kept as dead code
   mfaWorker.js        Web Worker: encodes WAV + POSTs to MFA server + returns phones/words
   canvasUtils.js      setupCanvas() (HiDPI), fmtTime()
+  shortcuts.js        ShortcutsPopover content (welcome text + shortcut tables) — edit here, not in App.jsx
   index.css           All styles (uses CSS custom properties — see :root block at top)
 
 dsp_server.py         Python DSP script: librosa mel spectrogram + parselmouth Praat formants
@@ -295,15 +296,9 @@ Each `onMove` tick calls `redraw()` (a full clear + repaint of every canvas from
 
 On `mouseup`, `snapGuideRef.current = null` and `redraw()` clears the lines.
 
-### Edit mode hint bar
+### Edit mode hint bar (removed)
 
-A 24px bar appears between the tiers and the minimap **only when edit mode is on**, showing all available shortcuts as `<kbd>` chips:
-
-```
-Click select  |  ⌫ delete  |  dbl-click rename  |  right-click more…  |  Alt+drag edge = no snap
-```
-
-CSS classes: `.edit-hint-bar`, `.edit-hint-bar__item`, `.edit-hint-bar__sep`.
+A 24px bar used to appear between the tiers and the minimap whenever edit mode was on, showing available shortcuts as `<kbd>` chips (`Click select | ⌫ delete | dbl-click rename | right-click more… | drag empty set loop | Alt+drag edge = no snap`). It was removed (2026-07) so the main view stays uncluttered — its content moved into the "TILE EDITING (EDIT MODE)" section of `ShortcutsPopover` (see [Keyboard Shortcuts](#keyboard-shortcuts) below), which is available on demand instead of always-on. The `.edit-hint-bar`/`.edit-hint-bar__item`/`.edit-hint-bar__sep` CSS classes and the `--hint-bar-bg`/`--hint-bar-border`/`--hint-sep` tokens were deleted along with it.
 
 ---
 
@@ -774,7 +769,7 @@ Note: the blue tile color and the green dashboard color are independent — `dra
 
 The edit mode hotkey is hardcoded to `1` in the keydown handler. The check matches `e.code`, `e.key`, and the `Numpad1` alias so numpad `1` works regardless of NumLock state.
 
-> These shortcuts are also surfaced in-app via `ShortcutsModal` (opened by clicking the **GSA** logo in the toolbar). `USAGE.md`'s [quick-reference table](../USAGE.md#keyboard-shortcuts--quick-reference) mirrors this table for end users — keep all three in sync with the keydown handler in `App.jsx`.
+> These shortcuts are also surfaced in-app via `ShortcutsPopover` — a non-blocking fold-out panel (opened by clicking the **GSA** logo in the toolbar; no backdrop, so the timeline/tiers stay clickable while it's open). `USAGE.md`'s [quick-reference table](../USAGE.md#keyboard-shortcuts--quick-reference) mirrors this table for end users — keep all three in sync with the keydown handler in `App.jsx`.
 
 ---
 
@@ -792,7 +787,7 @@ The edit mode hotkey is hardcoded to `1` in the keydown handler. The check match
   --bg-surface, --border-surface, --bg-deep       /* popover/modal/menu/strip surfaces */
   --bg-tooltip, --border-tooltip, --text-soft     /* tooltips, secondary text */
   --shadow-color, --backdrop                      /* box-shadow / modal scrim */
-  --hint-bar-bg, --hint-bar-border, --hint-sep, --kbd-*   /* edit-mode hint bar */
+  --kbd-*                                          /* shortcut-key chip styling (shortcuts popover) */
   --card-*, --toggle-track-*                      /* formant-card / spectrogram overlay HUD */
   --warn-*, --error-*, --save-*                   /* status-color families (keep hue across themes) */
   --mfa-*, --export-*, --tier-*                   /* semantic button families (keep hue across themes) */
@@ -806,12 +801,12 @@ Notable component classes:
 | Class | Purpose |
 |---|---|
 | `.btn-edit-split` / `__main` / `__badge` / `__capture` | Split edit+hotkey button — **unused**, kept for possible restore (see [Split Edit Button (removed)](#split-edit-button-removed)) |
-| `.edit-hint-bar` | Shortcut hint bar shown in edit mode |
 | `.save-indicator` | Inline save status in logo bar |
 | `.save-indicator--unsaved` | Amber — unsaved changes present |
 | `.save-indicator--saving/saved/error` | Blue/green/red state variants |
 | `.ctx-menu` / `__item` / `__sep` | Tier right-click context menu (built via `document.createElement`, see Theming below) |
-| `.popover-panel` | Shared shell for `ExportPopover`/`TierNamePopover` |
+| `.popover-panel` | Shared shell for `ExportPopover`/`TierNamePopover` — right-anchored (`right: 0`) since both toggle buttons sit on the right side of the toolbar |
+| `.shortcuts-popover-panel` | `ShortcutsPopover`'s shell — left-anchored (`left: 0`) variant of `.popover-panel`, since the GSA logo sits on the left; no backdrop, so it doesn't block interaction with the rest of the app while open |
 | `.modal-backdrop` / `.modal-card` | Shared shell for `FilePicker` and the MFA word-picker modal |
 | `.toast` / `--error` / `--warn` | Fixed-position dismissable toasts (MFA error/OOV warning) |
 | `.mfa-queue-dropdown` | MFA queue-count dropdown panel |
@@ -846,7 +841,7 @@ useEffect(() => {
 ```
 Unlike `showDashboard`/`mfaQueueOpen` (still UI-only, no ref), `theme` **is** read inside `draw*` functions now (see below), so it needs `themeRef` like any other hot-path value — and the effect calls `redraw()` on every toggle so the four affected canvases repaint immediately rather than waiting for the next incidental redraw. The toggle button is the last child of `.toolbar` (a plain `.btn`, 🌙/☀), so it inherits the toolbar-height-normalization rules above for free.
 
-**Light-mode plot background/text exception**: `drawWave`, `drawTier`, `drawMinimap`, and `drawScrollbar` each branch a small number of `fillStyle` values on `themeRef.current === 'light'`:
+**Light-mode plot background/text exception**: `drawWave`, `drawTier`, `drawMinimap`, `drawScrollbar`, and `drawRuler` each branch a small number of `fillStyle` values on `themeRef.current === 'light'`:
 
 | Function | Dark literal | Light literal | What it's for |
 |---|---|---|---|
@@ -856,8 +851,9 @@ Unlike `showDashboard`/`mfaQueueOpen` (still UI-only, no ref), `theme` **is** re
 | `drawMinimap` | `#0c0c0f` | `#ffffff` | Canvas background fill |
 | `drawMinimap` | `rgba(255,255,255,0.06)` | `rgba(0,0,0,0.06)` | Viewport-highlight overlay tint — a white tint is invisible on a white background, so light mode darkens instead of lightens |
 | `drawScrollbar` | `#0c0c0f` | `#ffffff` | Canvas background fill |
+| `drawRuler` | `#13131a` | `#ffffff` | Canvas background fill — tick-mark stroke (`#2a2a30`) and label text (`#45454d`) are left as-is, since dark-gray-on-white already reads fine and didn't need a light variant |
 
-The point of the exception: the waveform plot and the tier tiles now share the same white background in light mode (previously two different hardcoded darks), and the scrollbar-strip/minimap backgrounds match the surrounding light chrome instead of staying dark islands. Everything else in these four functions — waveform stroke/RMS fill, tile fill/stroke colors by score/selection/edit state, minimap word-tick colors, scrollbar thumb color (`#3a3a42`, left as-is — reads fine against white) — remains an untouched dark-mode literal. Do not widen this exception without a specific reason; see the frozen-dark boundary below for what's still off-limits.
+The point of the exception: the waveform plot, the tier tiles, and the time ruler now share the same white background in light mode (previously several different hardcoded darks), and the scrollbar-strip/minimap backgrounds match the surrounding light chrome instead of staying dark islands. Everything else in these five functions — waveform stroke/RMS fill, tile fill/stroke colors by score/selection/edit state, minimap word-tick colors, scrollbar thumb color (`#3a3a42`, left as-is — reads fine against white), ruler ticks/labels — remains an untouched dark-mode literal. Do not widen this exception without a specific reason; see the frozen-dark boundary below for what's still off-limits.
 
 **`data-theme` must live on `<html>`, not a div inside `#root`.** The tier right-click context menu (`onContextMenu`, `App.jsx`) is built via `document.createElement` and appended straight to `document.body` — a sibling of `#root`. Only `<html>`-level scoping puts it inside the themed subtree so its `.ctx-menu*` classes pick up the CSS variables. This is also why the menu was migrated from imperative `Object.assign(el.style, {...})` + JS `mouseenter`/`mouseleave` listeners to plain CSS classes with a `:hover` rule — inline styles can't reference `var(--...)` from outside the component that set them, but class-based CSS on a `document.body`-appended node still cascades correctly once `data-theme` is on `<html>`.
 
@@ -878,7 +874,7 @@ This must stay in `index.html`, not move into a React effect — React can't run
 
 **Token conventions**: generic surface/text tokens (`--bg-surface`, `--border-surface`, `--bg-tooltip`, `--text-soft`, `--accent-rgb` for `rgba(var(--accent-rgb), alpha)` blends) extend the pre-existing `:root` convention. Semantic brand-color families — `--mfa-*` (green), `--export-*` (green), `--tier-*` (blue), `--warn-*`/`--error-*`/`--save-*` (status colors) — get their **own** light-mode-adjusted values rather than being swept into the generic tokens, since they need to keep their hue meaning in both themes. Literal `#fff`/`#000` is left alone (not tokenized) wherever text is contrast-matched to a *fixed* accent color rather than to the page background (e.g. white text on the always-blue Play button) — correct in both themes by construction.
 
-**Frozen-dark boundary — do not add theme awareness beyond the table above**: `drawPlayheadLine`, `drawSelectionRect`, `drawSpec`, `drawFreqAxis`, `drawRuler`, `drawOverlay`, and `drawSnapGuide` remain entirely theme-unaware, as do `src/dsp.js`, `src/specWorker.js`, `src/formantWorker.js` (dead code, but still off-limits), `scoreColor()` and every call site (tile fills, `ConfidenceDashboard`'s stat values/histogram/lowest-confidence rows), and `ConfidenceDashboard`'s hardcoded gradient legend (mirrors the frozen canvas confidence scale). `drawWave`/`drawTier`/`drawMinimap`/`drawScrollbar` themselves are *not* fully off-limits anymore — only their background fill (plus `drawTier`'s tile text and `drawMinimap`'s viewport tint) is in scope, per the exception above; every other color decision inside those four functions is still frozen. The colormap→label-color table inside `drawSpec` (jet=black/inferno=white/viridis=white/greys=black) is about legibility against each *spectrogram colormap*, not the app theme — leave it alone too.
+**Frozen-dark boundary — do not add theme awareness beyond the table above**: `drawPlayheadLine`, `drawSelectionRect`, `drawSpec`, `drawFreqAxis`, `drawOverlay`, and `drawSnapGuide` remain entirely theme-unaware, as do `src/dsp.js`, `src/specWorker.js`, `src/formantWorker.js` (dead code, but still off-limits), `scoreColor()` and every call site (tile fills, `ConfidenceDashboard`'s stat values/histogram/lowest-confidence rows), and `ConfidenceDashboard`'s hardcoded gradient legend (mirrors the frozen canvas confidence scale). `drawWave`/`drawTier`/`drawMinimap`/`drawScrollbar`/`drawRuler` themselves are *not* fully off-limits anymore — only their background fill (plus `drawTier`'s tile text and `drawMinimap`'s viewport tint) is in scope, per the exception above; every other color decision inside those five functions is still frozen. The colormap→label-color table inside `drawSpec` (jet=black/inferno=white/viridis=white/greys=black) is about legibility against each *spectrogram colormap*, not the app theme — leave it alone too.
 
 **In scope despite sitting next to canvases**: `.minimap`/`.scrollbar-strip`/`*-gutter` div backgrounds (these are DOM chrome behind/beside the canvas, not `fillStyle` calls) and the `.formant-card`/`.spec-overlay-btns`/`.calc-spec-btn` floating HUD (DOM elements layered over the spectrogram via `backdrop-filter`, not canvas draw calls) — in light mode these render as a light, translucent card floating over the still-dark spectrogram underneath, which is intentional.
 
@@ -888,9 +884,9 @@ This must stay in `index.html`, not move into a React effect — React can't run
 
 - **`data-theme` must live on `<html>`, never a wrapper div inside `#root`.** The tier context menu is appended straight to `document.body`, a sibling of `#root` — only `<html>`-level scoping puts it inside the themed subtree.
 
-- **Canvas draw functions, `dsp.js`, `specWorker.js`, and `scoreColor()` must stay frozen dark, except the narrow `themeRef` exception in `drawWave`/`drawTier`/`drawMinimap`/`drawScrollbar`'s background fill (plus `drawTier`'s tile text and `drawMinimap`'s viewport tint).** See "Theming" under CSS for the full table. If you touch any *other* color logic in a `draw*` function while working on something else, that's a sign you've wandered outside the intended scope of the theming system — check the frozen-dark boundary list before proceeding.
+- **Canvas draw functions, `dsp.js`, `specWorker.js`, and `scoreColor()` must stay frozen dark, except the narrow `themeRef` exception in `drawWave`/`drawTier`/`drawMinimap`/`drawScrollbar`/`drawRuler`'s background fill (plus `drawTier`'s tile text and `drawMinimap`'s viewport tint).** See "Theming" under CSS for the full table. If you touch any *other* color logic in a `draw*` function while working on something else, that's a sign you've wandered outside the intended scope of the theming system — check the frozen-dark boundary list before proceeding.
 
-- **`themeRef` must be kept in sync with `theme` state** (dual state+ref rule) **and the theme-change effect must call `redraw()`.** `drawWave`/`drawTier`/`drawMinimap`/`drawScrollbar` read `themeRef.current` directly; without the `redraw()` call in the effect, toggling the theme button wouldn't repaint those backgrounds until some other trigger (scroll, edit) happened to redraw them.
+- **`themeRef` must be kept in sync with `theme` state** (dual state+ref rule) **and the theme-change effect must call `redraw()`.** `drawWave`/`drawTier`/`drawMinimap`/`drawScrollbar`/`drawRuler` read `themeRef.current` directly; without the `redraw()` call in the effect, toggling the theme button wouldn't repaint those backgrounds until some other trigger (scroll, edit) happened to redraw them.
 
 - **`setupCanvas` must be called at the start of every draw function.** It resets the transform.
 
@@ -1003,3 +999,19 @@ When `/api/public-files` returns more than one `.wav` or `.TextGrid`, the app re
 - `Ctrl/Cmd+S` save does not work in production builds (no server-side endpoint)
 - Browser holds full decoded `AudioBuffer` in memory for the entire session — no streaming path for long audio
 - Edit-mode hotkey is no longer rebindable from the UI (see [Split Edit Button (removed)](#split-edit-button-removed))
+
+---
+
+## Todos
+
+Follow-ups to pick up next session — flag any of these and we can plan/implement from here:
+
+1. Make the toolbar resizable/responsive with the window, instead of overflowing/wrapping at narrow widths.
+2. Fix spectrogram rendering problems — see [Spectrogram System](#spectrogram-system). Specifically: can "Enhance Spectrogram" run before/while the audio loads, instead of only on demand after, so it isn't recomputing constantly during normal use?
+3. Waveform y-axis (amplitude) should stay consistent across the whole file instead of rescaling as you scroll/zoom — but still let the user manually zoom the y-axis if they want. See `drawWave`.
+4. Add a font-size control (slider) near the WRD/PHN visibility checkboxes so users can manually bump up tile text size, independent of the current auto-scaling by row height (see [Tile Rendering — Font Scaling](#tile-rendering--font-scaling)).
+5. Audit the codebase for dead code and clean it up — candidates already flagged elsewhere in this doc: the commented-out Split Edit Button UI/state (see [Split Edit Button (removed)](#split-edit-button-removed)), `formantWorker.js` (superseded by `dsp_server.py`), and the `audioFileName` state (set on every load but no longer displayed anywhere — see [File Picker](#file-picker-filepicker-component)).
+6. Clarify save behavior — see [Save to Disk](#save-to-disk-ctrlcmds). Does `Ctrl/Cmd+S` silently overwrite the existing TextGrid on disk? If so, show the user a confirmation popup before/when that overwrite happens.
+7. Fix issues in formant generation and add pitch (F0) tracking alongside F1/F2/F3 — see [Formant Tracking](#formant-tracking).
+8. Change playback so Play only plays the currently-visible section of the timeline (like Audacity), rather than the current selection/full-duration behavior — see [Playback](#playback).
+9. Audit for more light-mode contrast bugs. The invisible white-on-white Export "Cancel" button and the still-dark ruler bar (both fixed 2026-07) were found by manually clicking through in light mode, not a systematic pass — there are likely other spots with the same class of issue (a white-text button class combined with a transparent background, or a hardcoded dark literal in a `draw*` function that should join the [light-mode plot background exception](#theming-lightdark-mode)).

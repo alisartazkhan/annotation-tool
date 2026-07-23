@@ -5,6 +5,7 @@ import {
   COLORMAPS, inferno,
   buildMelSpectrogram, buildRmsEnvelope,
 } from './dsp.js';
+import { WELCOME_TITLE, WELCOME_TEXT, SHORTCUTS, TILE_EDITING_HINTS } from './shortcuts.js';
 
 
 let _nextId = 1;
@@ -348,7 +349,7 @@ function ExportPopover({ defaultName, customTiers, onExport, onClose }) {
       </div>
 
       <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', marginTop: 2 }}>
-        <button className="btn btn-export" onClick={onClose}
+        <button className="btn" onClick={onClose}
           style={{ padding: '4px 10px', fontSize: 12, background: 'transparent' }}>Cancel</button>
         <button className="btn btn-export" onClick={doExport}
           style={{ padding: '4px 10px', fontSize: 12 }}>↓ Download</button>
@@ -442,67 +443,57 @@ function FilePicker({ wavs, tgs, onSelect }) {
   );
 }
 
-const SHORTCUTS = [
-  { keys: ['Space'], desc: 'Play / pause' },
-  { keys: ['L'], desc: 'Toggle loop' },
-  { keys: ['F'], desc: 'Fit full duration in view' },
-  { keys: ['Home'], desc: 'Reset view to the first 20 seconds' },
-  { keys: ['1'], desc: 'Toggle edit mode (on by default)' },
-  { keys: ['←', '→'], desc: 'Pan the view by 20% of the current span' },
-  { keys: ['Ctrl/Cmd+S'], desc: 'Save the TextGrid to disk (dev only)' },
-  { keys: ['Ctrl/Cmd+Z'], desc: 'Undo' },
-  { keys: ['Ctrl/Cmd+Y'], desc: 'Redo' },
-  { keys: ['Ctrl/Cmd+C'], desc: "Copy the selected tile's label (edit mode, requires a selection)" },
-  { keys: ['Ctrl/Cmd+V'], desc: 'Paste the copied label onto all selected tiles (edit mode, requires a selection)' },
-  { keys: ['⌫', 'Delete'], desc: 'Delete the selected tile(s) (edit mode, requires a selection)' },
-  { keys: ['Shift'], suffix: '+click', desc: 'Range-select tiles from the last-selected tile to the clicked tile (edit mode)' },
-  { keys: ['Ctrl/Cmd'], suffix: '+click (or drag)', desc: 'Same range-select as Shift+click (edit mode)' },
-];
-
-function ShortcutsModal({ onClose }) {
+function ShortcutSectionLabel({ text }) {
   return (
-    <div className="modal-backdrop" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="modal-card shortcuts-modal" style={{
-        padding: '28px 32px', minWidth: 460, maxWidth: 600, maxHeight: '85vh', overflowY: 'auto',
-        fontFamily: 'Inter,system-ui,sans-serif',
-      }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 12 }}>
-          <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--text)' }}>
-            Welcome to the GLySN Speech Annotator (GSA)
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            style={{ background: 'none', border: 'none', color: 'var(--text-mute)', cursor: 'pointer', fontSize: 14, lineHeight: 1, padding: '0 0 0 4px', flexShrink: 0 }}
-          >✕</button>
-        </div>
+    <div style={{
+      gridColumn: '1 / -1', fontSize: 10, fontWeight: 600, color: 'var(--text-mute)',
+      letterSpacing: 0.5, padding: '14px 8px 6px',
+    }}>{text}</div>
+  );
+}
 
-        <div style={{ fontSize: 12, color: 'var(--text-soft)', lineHeight: 1.5, marginBottom: 20 }}>
-          We hope you find this tool useful for generating and revising word- and phoneme-level
-          annotations of speech. Before you get started, here are some helpful keyboard shortcuts
-          you should know about:
-        </div>
+function ShortcutRows({ rows }) {
+  return rows.map((row, i) => (
+    <React.Fragment key={i}>
+      <div style={{ padding: '6px 8px', background: i % 2 ? 'var(--bg-panel)' : 'transparent', display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 4 }}>
+        {row.keys.map((k, j) => (
+          <React.Fragment key={j}>
+            {j > 0 && <span style={{ color: 'var(--text-mute)' }}>/</span>}
+            <kbd>{k}</kbd>
+          </React.Fragment>
+        ))}
+        {row.suffix && <span style={{ color: 'var(--text-dim)' }}>{row.suffix}</span>}
+      </div>
+      <div style={{ padding: '6px 8px', background: i % 2 ? 'var(--bg-panel)' : 'transparent', color: 'var(--text-dim)', display: 'flex', alignItems: 'center' }}>
+        {row.desc}
+      </div>
+    </React.Fragment>
+  ));
+}
 
-        <div style={{ display: 'grid', gridTemplateColumns: '150px 1fr', fontSize: 12 }}>
-          <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-mute)', letterSpacing: 0.5, padding: '0 8px 6px' }}>SHORTCUT</div>
-          <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-mute)', letterSpacing: 0.5, padding: '0 8px 6px' }}>ACTION</div>
-          {SHORTCUTS.map((row, i) => (
-            <React.Fragment key={i}>
-              <div style={{ padding: '6px 8px', background: i % 2 ? 'var(--bg-panel)' : 'transparent', display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 4 }}>
-                {row.keys.map((k, j) => (
-                  <React.Fragment key={j}>
-                    {j > 0 && <span style={{ color: 'var(--text-mute)' }}>/</span>}
-                    <kbd>{k}</kbd>
-                  </React.Fragment>
-                ))}
-                {row.suffix && <span style={{ color: 'var(--text-dim)' }}>{row.suffix}</span>}
-              </div>
-              <div style={{ padding: '6px 8px', background: i % 2 ? 'var(--bg-panel)' : 'transparent', color: 'var(--text-dim)', display: 'flex', alignItems: 'center' }}>
-                {row.desc}
-              </div>
-            </React.Fragment>
-          ))}
+function ShortcutsPopover({ onClose }) {
+  return (
+    <div className="shortcuts-popover-panel" style={{ fontFamily: 'Inter,system-ui,sans-serif' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 12 }}>
+        <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--text)' }}>
+          {WELCOME_TITLE}
         </div>
+        <button
+          type="button"
+          onClick={onClose}
+          style={{ background: 'none', border: 'none', color: 'var(--text-mute)', cursor: 'pointer', fontSize: 14, lineHeight: 1, padding: '0 0 0 4px', flexShrink: 0 }}
+        >✕</button>
+      </div>
+
+      <div style={{ fontSize: 12, color: 'var(--text-soft)', lineHeight: 1.5, marginBottom: 8 }}>
+        {WELCOME_TEXT}
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '150px 1fr', fontSize: 12 }}>
+        <ShortcutSectionLabel text="KEYBOARD" />
+        <ShortcutRows rows={SHORTCUTS} />
+        <ShortcutSectionLabel text="TILE EDITING (EDIT MODE)" />
+        <ShortcutRows rows={TILE_EDITING_HINTS} />
       </div>
     </div>
   );
@@ -625,7 +616,7 @@ export default function App() {
   // const [editShortcut, setEditShortcut] = useState('1');
   // const [editingShortcut, setEditingShortcut] = useState(false);
   const [showDashboard, setShowDashboard] = useState(false);
-  const [showShortcutsModal, setShowShortcutsModal] = useState(false);
+  const [showShortcutsPopover, setShowShortcutsPopover] = useState(false);
   // Chrome-only theme (toolbar/panels/popovers). drawWave/drawTier also read themeRef for their
   // background fill (see themeRef below) so the plot backgrounds match the light-theme panel bg;
   // all other canvas colors (waveform stroke, spectrogram, confidence coloring) stay frozen dark.
@@ -1098,7 +1089,7 @@ export default function App() {
     if (!s) return;
     const { ctx, w, h } = s;
     const { t0, t1 } = viewRef.current;
-    ctx.fillStyle = '#13131a'; ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = themeRef.current === 'light' ? '#ffffff' : '#13131a'; ctx.fillRect(0, 0, w, h);
     const span = t1 - t0, pxPerSec = w / span;
     const steps = [0.1, 0.25, 0.5, 1, 2, 5, 10, 30];
     const step = steps.find(st => st * pxPerSec >= 70) || 30;
@@ -3056,7 +3047,7 @@ export default function App() {
           <button
             type="button"
             className="logo-btn"
-            onClick={() => setShowShortcutsModal(true)}
+            onClick={() => setShowShortcutsPopover(v => !v)}
             title="Keyboard shortcuts"
           >
             GSA
@@ -3068,6 +3059,9 @@ export default function App() {
             <span className={`save-indicator save-indicator--${saveState}`}>
               {saveState === 'saving' ? '⟳ Saving…' : saveState === 'saved' ? '✓ Saved' : '✕ Save failed'}
             </span>
+          )}
+          {showShortcutsPopover && (
+            <ShortcutsPopover onClose={() => setShowShortcutsPopover(false)} />
           )}
         </div>
         <div className="spacer" />
@@ -3087,7 +3081,8 @@ export default function App() {
                 alert('Place a .wav file in public/ and reload the page.');
               }
             }}
-          >{playing ? '⏸ Pause' : '▶ Play'}</button>
+            title={playing ? 'Pause (Space)' : 'Play (Space)'}
+          >{playing ? '⏸' : '▶'}</button>
           <button className="btn" onClick={() => { stopPlay(); playheadRef.current = 0; updateTimeDisplay(); redraw(); }}>■</button>
           <div className="time-display" ref={timeDisplayRef}>
             {fmtTime(playheadRef.current)} / {fmtTime(duration)}
@@ -3574,35 +3569,6 @@ export default function App() {
 
         </div>{/* timeline-body */}
 
-        {/* ── Edit mode hint bar ───────────────────────────────────────── */}
-        {editMode && (
-          <div className="edit-hint-bar">
-            <span className="edit-hint-bar__item">
-              <kbd>Click</kbd> select
-            </span>
-            <span className="edit-hint-bar__sep" />
-            <span className="edit-hint-bar__item">
-              <kbd>⌫</kbd> delete
-            </span>
-            <span className="edit-hint-bar__sep" />
-            <span className="edit-hint-bar__item">
-              <kbd>dbl-click</kbd> rename
-            </span>
-            <span className="edit-hint-bar__sep" />
-            <span className="edit-hint-bar__item">
-              <kbd>right-click</kbd> more…
-            </span>
-            <span className="edit-hint-bar__sep" />
-            <span className="edit-hint-bar__item">
-              <kbd>drag empty</kbd> set loop
-            </span>
-            <span className="edit-hint-bar__sep" />
-            <span className="edit-hint-bar__item">
-              <kbd>Alt</kbd>+drag edge = no snap
-            </span>
-          </div>
-        )}
-
         <div className="minimap">
           <div className="minimap-gutter" />
           <canvas ref={minimapCanvasRef} />
@@ -3731,10 +3697,6 @@ export default function App() {
             </div>
           </div>
         </div>
-      )}
-
-      {showShortcutsModal && (
-        <ShortcutsModal onClose={() => setShowShortcutsModal(false)} />
       )}
 
     </>

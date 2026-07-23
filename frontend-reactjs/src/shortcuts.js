@@ -1,0 +1,42 @@
+// Content for the "GSA" logo's shortcuts popover (see ShortcutsPopover in App.jsx).
+//
+// WELCOME_TITLE / WELCOME_TEXT: the heading and intro paragraph shown at the top of the popover.
+//
+// SHORTCUTS / TILE_EDITING_HINTS: each row is { keys: string[], suffix?: string, desc: string }
+//   - keys: rendered as one or more <kbd> chips, joined by "/" if there's more than one
+//   - suffix: optional plain text appended right after the key chip(s), e.g. "+click"
+//   - desc: the action description
+//
+// Keep SHORTCUTS/TILE_EDITING_HINTS in sync with the actual keydown handler and tier mousedown
+// handler in App.jsx — this file is documentation of that behavior, not the source of truth for it.
+
+export const WELCOME_TITLE = 'Welcome to the GLySN Speech Annotator (GSA)';
+
+export const WELCOME_TEXT = `We hope you find this tool useful for generating and revising word- and phoneme-level
+annotations of speech. Before you get started, here are some helpful keyboard shortcuts
+you should know about:`;
+
+export const SHORTCUTS = [
+  { keys: ['Space'], desc: 'Play / pause' },
+  { keys: ['L'], desc: 'Toggle loop' },
+  { keys: ['F'], desc: 'Fit full duration in view' },
+  { keys: ['Home'], desc: 'Reset view to the first 20 seconds' },
+  { keys: ['1'], desc: 'Toggle edit mode (on by default)' },
+  { keys: ['←', '→'], desc: 'Pan the view by 20% of the current span' },
+  { keys: ['Ctrl/Cmd+S'], desc: 'Save the TextGrid to disk (dev only)' },
+  { keys: ['Ctrl/Cmd+Z'], desc: 'Undo' },
+  { keys: ['Ctrl/Cmd+Y'], desc: 'Redo' },
+  { keys: ['Ctrl/Cmd+C'], desc: "Copy the selected tile's label (edit mode, requires a selection)" },
+  { keys: ['Ctrl/Cmd+V'], desc: 'Paste the copied label onto all selected tiles (edit mode, requires a selection)' },
+  { keys: ['⌫', 'Delete'], desc: 'Delete the selected tile(s) (edit mode, requires a selection)' },
+  { keys: ['Shift'], suffix: '+click', desc: 'Range-select tiles from the last-selected tile to the clicked tile (edit mode)' },
+  { keys: ['Ctrl/Cmd'], suffix: '+click (or drag)', desc: 'Same range-select as Shift+click (edit mode)' },
+];
+
+export const TILE_EDITING_HINTS = [
+  { keys: ['Click'], desc: 'Select a tile' },
+  { keys: ['Double-click'], desc: 'Rename a tile (opens the label editor)' },
+  { keys: ['Right-click'], desc: 'Open the context menu — rename, merge with next, or delete' },
+  { keys: ['Drag'], suffix: ' empty space', desc: 'Set a loop selection region' },
+  { keys: ['Alt'], suffix: '+drag edge', desc: 'Drag a tile edge without snapping to nearby boundaries' },
+];
