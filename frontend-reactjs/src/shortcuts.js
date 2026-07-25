@@ -23,6 +23,7 @@ export const SHORTCUTS = [
   { keys: ['Home'], desc: 'Reset view to the first 20 seconds' },
   { keys: ['1'], desc: 'Toggle edit mode (on by default)' },
   { keys: ['←', '→'], desc: 'Pan the view by 20% of the current span' },
+  { keys: ['+', '-'], desc: 'Zoom the waveform amplitude, or tile text size if a tier was last clicked' },
   { keys: ['Ctrl/Cmd+S'], desc: 'Save the TextGrid to disk (dev only)' },
   { keys: ['Ctrl/Cmd+Z'], desc: 'Undo' },
   { keys: ['Ctrl/Cmd+Y'], desc: 'Redo' },

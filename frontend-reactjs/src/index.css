@@ -12,7 +12,7 @@
   --text-dark: #45454d;
   --accent:    #3a7bd5;
   --mono:      "JetBrains Mono", monospace;
-  --toolbar-btn-h: 34px;
+  --toolbar-btn-h: 28px;
 
   /* Chrome-only theme tokens. The waveform/spectrogram/tier canvas area is drawn with its own
      hardcoded colors in App.jsx's draw* functions and is intentionally NOT theme-aware — these
@@ -190,8 +190,8 @@ html, body {
 
 /* ── Toolbar ── */
 .toolbar {
-  height: 54px; flex-shrink: 0;
-  display: flex; align-items: center; gap: 12px; padding: 0 16px;
+  min-height: 54px; flex-shrink: 0;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 8px 16px;
   background: var(--bg-ui); border-bottom: 1px solid var(--border-ui2);
 }
 .logo { font-weight: 600; font-size: 18px; color: var(--text); letter-spacing: -0.3px; display: flex; align-items: center; gap: 0; position: relative; }
@@ -263,7 +263,20 @@ html, body {
 .toolbar .btn,
 .toolbar .load-btn {
   display: flex; align-items: center; justify-content: center;
-  padding: 0 15px; white-space: nowrap;
+  padding: 0 10px; white-space: nowrap;
+}
+
+/* .btn-label uses margin, not a leading space in its text content, for the gap after
+   the icon — `.toolbar .btn` is `display: flex`, which makes the icon and this span
+   separate flex items; a leading space *inside* the span's own text gets trimmed by
+   whitespace-collapsing since it sits at the start of the span's own box. */
+.toolbar .btn-label { margin-left: 5px; }
+
+/* Below this width, collapse Loop/Scores/Export to icon-only to buy back room before
+   the toolbar has to wrap to a second row. Threshold is an estimate — retune by
+   resizing the window and watching where wrapping actually kicks in. */
+@media (max-width: 1100px) {
+  .toolbar .btn-label { display: none; }
 }
 .toolbar .btn-edit-split__main {
   display: flex; align-items: center; justify-content: center;
@@ -323,6 +336,14 @@ html, body {
   color: var(--text-dark); letter-spacing: 1px;
 }
 .tier-gutter { flex-direction: column; gap: 3px; }
+
+/* ── Waveform y-zoom +/- (panel-gutter modifier, wave panel only) ── */
+.panel-gutter--wave { flex-direction: column; justify-content: space-between; padding: 4px 0; }
+.panel-gutter-btn {
+  background: none; border: none; color: var(--text-dark); cursor: pointer;
+  font-size: 13px; line-height: 1; padding: 2px 6px;
+}
+.panel-gutter-btn:hover { color: var(--accent); }
 
 .panel-body {
   flex: 1; min-width: 0; position: relative; overflow: hidden;
@@ -406,30 +427,6 @@ html, body {
   border: 1px solid rgba(var(--accent-rgb),0.5); border-radius: 6px;
   background: var(--card-bg); backdrop-filter: blur(4px);
   overflow: hidden;
-}
-.formant-card__top-row {
-  display: flex; align-items: stretch;
-}
-.formant-card__settings-toggle {
-  padding: 4px 7px; border: none; border-left: 1px solid rgba(var(--accent-rgb),0.25);
-  background: transparent; color: var(--card-icon); font-size: 11px;
-  font-family: inherit; cursor: pointer;
-  transition: background 100ms, color 100ms;
-}
-.formant-card__settings-toggle:hover,
-.formant-card__settings-toggle.open { background: rgba(var(--accent-rgb),0.15); color: var(--accent-soft); }
-.formant-card__settings {
-  display: flex; flex-direction: column; gap: 4px;
-  padding: 6px 8px; border-top: 1px solid rgba(var(--accent-rgb),0.2);
-}
-.spec-param-row {
-  display: flex; align-items: center; justify-content: space-between;
-  gap: 8px; font-size: 10px; color: var(--card-label); white-space: nowrap;
-}
-.spec-param-row select {
-  background: var(--bg-panel); color: var(--card-select-text); border: 1px solid var(--border-surface);
-  border-radius: 3px; padding: 1px 4px; font-size: 10px;
-  font-family: inherit; cursor: pointer;
 }
 .formant-card__generate {
   padding: 4px 10px; border: none; border-bottom: 1px solid rgba(var(--accent-rgb),0.25);

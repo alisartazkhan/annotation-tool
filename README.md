@@ -110,7 +110,7 @@ code/
 │   ├── run_whisper.sh        — convenience script for WhisperX
 │   └── run_parakeet.sh       — convenience script for Parakeet
 └── frontend-reactjs/         — annotation tool (React + Vite)
-    ├── dsp_server.py         — Python DSP: mel spectrogram (librosa) + formants (parselmouth/Praat)
+    ├── dsp_server.py         — Python DSP: linear-frequency STFT spectrogram, mel-warped display axis (librosa), run as a persistent worker + formants (parselmouth/Praat)
     ├── vite.config.js        — Vite config + dev-server middleware (/api/compute-dsp, /api/save-textgrid)
     ├── public/               — place your .wav and .TextGrid here
     └── src/

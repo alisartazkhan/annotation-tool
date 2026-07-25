@@ -2,7 +2,7 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react-swc';
 import fs from 'fs';
 import path from 'path';
-import { execFile, execFileSync } from 'child_process';
+import { spawn, execFileSync } from 'child_process';
 
 // Resolve the Python binary for the 'aligner' conda environment.
 // Resolution order:
@@ -25,6 +25,73 @@ const PYTHON = resolveAlginerPython();
 console.log(`[vite] Using Python: ${PYTHON}`);
 
 const DSP_SCRIPT = path.resolve(__dirname, 'dsp_server.py');
+const DSP_TIMEOUT_MS = 15000;
+
+// ── Persistent dsp_server.py worker ─────────────────────────────────────────
+// A fresh subprocess per /api/compute-dsp request paid a real, repeated cost
+// re-importing numpy/librosa/parselmouth every single time. Keep one `--serve`
+// process alive instead, and talk to it via a JSON-line-per-request/response
+// protocol over its stdin/stdout, correlated by an incrementing id (multiple
+// requests can be in flight — e.g. a sharp-tier fetch and an overview-chunk
+// fetch — even though the worker itself processes them strictly FIFO).
+let dspWorker = null;
+let nextDspId = 1;
+const dspPending = new Map(); // id -> { resolve, reject, timer }
+
+function failAllPendingDsp(err) {
+  for (const [, p] of dspPending) { clearTimeout(p.timer); p.reject(err); }
+  dspPending.clear();
+}
+
+function getDspWorker() {
+  if (dspWorker) return dspWorker;
+  dspWorker = spawn(PYTHON, [DSP_SCRIPT, '--serve']);
+  let outBuf = '';
+  dspWorker.stdout.on('data', (chunk) => {
+    outBuf += chunk.toString('utf8');
+    let nl;
+    while ((nl = outBuf.indexOf('\n')) >= 0) {
+      const line = outBuf.slice(0, nl);
+      outBuf = outBuf.slice(nl + 1);
+      if (!line.trim()) continue;
+      let msg;
+      try { msg = JSON.parse(line); } catch (_) { continue; }
+      const p = dspPending.get(msg.id);
+      if (!p) continue; // already timed out / unknown id — drop silently
+      dspPending.delete(msg.id);
+      clearTimeout(p.timer);
+      msg.error ? p.reject(new Error(msg.error)) : p.resolve(msg);
+    }
+  });
+  dspWorker.stderr.on('data', (chunk) => console.error('[dsp_server]', chunk.toString()));
+  const onDown = (err) => {
+    failAllPendingDsp(err instanceof Error ? err : new Error('dsp worker exited'));
+    dspWorker = null;
+  };
+  dspWorker.on('exit', () => onDown());
+  dspWorker.on('error', onDown);
+  return dspWorker;
+}
+
+// Per-request timeout replaces execFile's old built-in `timeout` option (spawn has no
+// per-call equivalent) — this is what guarantees a hung/slow request still resolves
+// instead of leaving the frontend's in-flight tracking wedged forever (see
+// HANDOFF.md "Spectrogram System"). A response that arrives after its own timeout
+// already fired is dropped silently in getDspWorker() above, not treated as an error.
+function runDsp(req) {
+  const id = nextDspId++;
+  const worker = getDspWorker();
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      dspPending.delete(id);
+      reject(new Error(`dsp request timed out after ${DSP_TIMEOUT_MS}ms`));
+    }, DSP_TIMEOUT_MS);
+    dspPending.set(id, { resolve, reject, timer });
+    worker.stdin.write(JSON.stringify({ id, ...req }) + '\n', (err) => {
+      if (err) { clearTimeout(timer); dspPending.delete(id); reject(err); }
+    });
+  });
+}
 
 function publicFilesPlugin() {
   return {
@@ -46,28 +113,20 @@ function publicFilesPlugin() {
         }
         let body = '';
         req.on('data', chunk => { body += chunk; });
-        req.on('end', () => {
+        req.on('end', async () => {
           try {
-            const { wavFile, t0, t1, nMels = 128, nFft = 512, colormap = 'inferno', pw = 1400, ph = 400 } = JSON.parse(body);
+            const { wavFile, t0, t1, colormap = 'inferno', pw = 1400, ph = 400, kind = 'both' } = JSON.parse(body);
             const safe = path.basename(wavFile);
             if (!/\.wav$/i.test(safe)) {
               res.statusCode = 400; res.end('Only .wav files allowed'); return;
             }
             const wavPath = path.resolve(__dirname, 'public', safe);
-            execFile(PYTHON, [DSP_SCRIPT, wavPath, String(t0), String(t1), String(nMels), String(nFft), colormap, String(pw), String(ph)],
-              { maxBuffer: 50 * 1024 * 1024 },
-              (err, stdout, stderr) => {
-                if (err) {
-                  console.error('[dsp_server]', stderr);
-                  res.statusCode = 500;
-                  res.end(JSON.stringify({ error: String(err), stderr }));
-                  return;
-                }
-                res.setHeader('Content-Type', 'application/json');
-                res.end(stdout);
-              }
-            );
+            const result = await runDsp({ wavFile: wavPath, t0, t1, colormap, pw, ph, kind });
+            delete result.id;
+            res.setHeader('Content-Type', 'application/json');
+            res.end(JSON.stringify(result));
           } catch (e) {
+            console.error('[dsp_server]', e);
             res.statusCode = 500; res.end(JSON.stringify({ error: String(e) }));
           }
         });
@@ -96,6 +155,10 @@ function publicFilesPlugin() {
           }
         });
       });
+
+      // Stopping the dev server shouldn't leave an orphaned dsp_server.py --serve
+      // process running.
+      server.httpServer?.once('close', () => { dspWorker?.kill(); dspWorker = null; });
     },
   };
 }

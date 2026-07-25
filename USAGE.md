@@ -48,6 +48,8 @@ You can also load files at any time without restarting:
 | Pan left/right | Horizontal scroll, Arrow keys (20% of view), or drag the minimap |
 | Fit full audio | `F` |
 | Reset to start | `Home` |
+| Waveform amplitude zoom | `+`/`-` buttons next to the "WV" label, or `+`/`-` keys after clicking the waveform |
+| Tile text size | `+`/`-` buttons in the SHOW bar, or `+`/`-` keys after clicking a tile |
 | Seek | Click anywhere on the waveform, spectrogram, or ruler |
 | Select tile | Click any tile (edit mode not required) — moves playhead to onset and sets play region |
 | Play tile | After selecting a tile, press `Space` or ▶ Play |
@@ -123,5 +125,6 @@ Click **↓ Export** to download the annotations as a file. Two format options:
 | `Shift+click` | Range-select tiles from the last-selected tile to the clicked tile (edit mode) |
 | `Ctrl/Cmd+click` (or drag) | Range-select tiles — same as `Shift+click` (edit mode) |
 | `←` / `→` | Pan view by 20% |
+| `+` / `-` | Zoom waveform amplitude, or tile text size if a tier was last clicked |
 
 > These shortcuts are also available in-app: click the **GSA** logo in the top-left of the toolbar to open the keyboard-shortcuts reference at any time.

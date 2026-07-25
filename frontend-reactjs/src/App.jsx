@@ -15,6 +15,58 @@ const nextId = () => _nextId++;
 const getTierType = (tierId) =>
   tierId === 'phones' ? 'phone' : tierId === 'words' ? 'word' : 'custom';
 
+// ── Waveform y-axis (amplitude) manual zoom, and tile font-size scale ───────
+// Both are stepped multipliers (each +/- click or keypress multiplies/divides by a
+// fixed ratio, clamped to [MIN, MAX]) applied on top of a fixed baseline computed
+// elsewhere (drawWave's full-file gain; drawTier's row-height auto-scaling) — see the
+// panel-gutter +/- buttons (waveform) and SHOW-bar +/- buttons (tile text).
+const YZOOM_MIN_MULT = 0.25;
+const YZOOM_MAX_MULT = 4;
+const YZOOM_STEP = 1.2;
+const FONT_SCALE_MIN = 0.7;
+const FONT_SCALE_MAX = 2;
+const FONT_SCALE_STEP = 1.15;
+
+// ── Enhanced-spectrogram rolling prefetch buffer ────────────────────────────
+const SPEC_BUFFER_MULTIPLIER = 3;     // total cached span = 3x the current viewport
+const SPEC_LEAD_TRIGGER_FRAC = 0.5;   // refetch once remaining lead < 50% of one viewport
+// Both tuned low (2026-07-24) now that dsp_server.py runs as a persistent worker with
+// an in-memory audio cache — a warm request costs ~15-20ms, not the ~800ms-3s a cold
+// per-request subprocess used to cost, so there's no longer a real cost to firing (and
+// occasionally superseding) a fetch quickly during fast continuous scrolling. Higher
+// values here previously showed up as visible lag: the sharp tier could go up to
+// SPEC_PREFETCH_MAX_WAIT_MS before a fetch was even dispatched, regardless of how fast
+// the backend itself had become.
+const SPEC_PREFETCH_DEBOUNCE_MS = 50;
+const SPEC_PREFETCH_MAX_WAIT_MS = 100; // force a fetch even during continuous interaction
+const SPEC_FETCH_TIMEOUT_MS = 20000;   // client-side backstop; server-side per-request timeout (runDsp in vite.config.js) fires first
+// Watchdog for the in-flight/pending markers below: if a fetch's own finally/catch
+// never runs (should be impossible once SPEC_FETCH_TIMEOUT_MS is honored, but this is
+// the last line of defense against ever getting permanently wedged), treat the marker
+// as stale after this long and allow a retry instead of blocking forever.
+const SPEC_INFLIGHT_WATCHDOG_MS = SPEC_FETCH_TIMEOUT_MS * 2;
+
+// ── Overview cache tier — fixed pixel width, independent of chunk/file duration ────
+const OVERVIEW_CHUNK_SEC = 300;  // 5 minutes; files <= this get one chunk covering the whole file
+const OVERVIEW_PW = 1800;        // fixed regardless of chunk span — bounds payload size
+
+const getChunkIndex = (t) => Math.floor(t / OVERVIEW_CHUNK_SEC);
+const getChunkBounds = (idx, duration) => ({
+  chunkT0: idx * OVERVIEW_CHUNK_SEC,
+  chunkT1: Math.min(duration, (idx + 1) * OVERVIEW_CHUNK_SEC),
+});
+
+// dsp_server.py returns the spectrogram strip as a base64 PNG (spec.png) rather than
+// a flat pixel-number array — much smaller and much faster to parse than the old
+// ImageData/putImageData path.
+async function pngBase64ToOffscreen(base64) {
+  const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+  const bitmap = await createImageBitmap(new Blob([bytes], { type: 'image/png' }));
+  const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+  canvas.getContext('2d').drawImage(bitmap, 0, 0);
+  return canvas;
+}
+
 // ── IPA virtual keyboard ──────────────────────────────────────────────────────
 
 // Loaded once from public/ipa_keys.json — edit that file to change the keys.
@@ -606,9 +658,6 @@ export default function App() {
   const [showFormants, setShowFormants] = useState(false);
   const [specComputing, setSpecComputing] = useState(false);
   const [formantComputing, setFormantComputing] = useState(false);
-  const [specNMels, setSpecNMels] = useState(128);
-  const [specNFft, setSpecNFft] = useState(512);
-  const [showSpecSettings, setShowSpecSettings] = useState(false);
   const [editMode, setEditMode]         = useState(true);
   const [labelEditor, setLabelEditor]   = useState(null); // { id, tierId, tierType, text, x, y, boxW }
   // Rebindable edit-mode shortcut — UI removed (hotkey is now hardcoded to '1', see keydown handler
@@ -674,11 +723,26 @@ export default function App() {
   const selectionRef     = useRef(null);
   const waveformDataRef  = useRef(null);
   const spectroRef       = useRef(null);
-  const spectroCacheRef  = useRef({ canvas: null }); // high-res local view cache
+  const spectroCacheRef  = useRef({ canvas: null }); // high-res local view cache (± prefetch buffer)
   const baseSpecCacheRef = useRef({ canvas: null }); // full-duration low-res cache
   const baseSpecWorkerRef = useRef(null);
+  const specFetchGenRef      = useRef(0);    // stale-response guard, same pattern as playGenRef
+  const specPrefetchTimerRef = useRef(null); // debounce timer for auto-prefetch
+  const specNeedsSinceRef    = useRef(null); // performance.now() when needsSpecRefetch first went true
+  // performance.now() timestamp while a fetchEnhancedSpec call is in flight, else null.
+  // A timestamp (not a bare boolean) lets scheduleSpecPrefetch's watchdog tell a
+  // healthy in-flight request apart from one that's been stuck for implausibly long
+  // (SPEC_INFLIGHT_WATCHDOG_MS) and route around it instead of blocking forever.
+  const specFetchInFlightRef = useRef(null);
+  const scheduleSpecPrefetchRef = useRef(() => {}); // indirection so redraw() (defined earlier) can call it
+  const overviewCacheRef = useRef(new Map()); // chunkIndex -> { canvas, ph, stripT0, stripT1, stripPw, params }
   const zoomRafRef       = useRef(null);
-  const viewPeakRef      = useRef({ t0: -1, t1: -1, peak: 0 });
+  const fullPeakRef      = useRef(1); // whole-file max(|sample|), computed once in loadAudio
+  const yZoomRef         = useRef(1); // manual multiplier on top of the fixed full-file gain
+  const fontScaleRef     = useRef(1); // manual multiplier on top of drawTier's row-height auto-scaling
+  // 'waveform' | 'tiles' — which panel was last clicked, so +/- keys know whether to
+  // adjust yZoomRef or fontScaleRef. No state twin: nothing displays this value.
+  const focusedPanelRef  = useRef('waveform');
   const specWorkerRef    = useRef(null);
   const formantWorkerRef = useRef(null);
   const formantViewRef   = useRef(null);
@@ -692,8 +756,6 @@ export default function App() {
   const durationRef      = useRef(70);
   const colormapNameRef  = useRef('jet');
   const showFormantsRef  = useRef(false);
-  const specNMelsRef     = useRef(128);
-  const specNFftRef      = useRef(512);
   const rmsEnvRef        = useRef(null);
   const formantTrackRef  = useRef(null);
   const editModeRef      = useRef(true);
@@ -886,23 +948,13 @@ export default function App() {
       const rawLen = rawCh ? rawCh.length : 0;
       const samplesPerPx = rawCh ? ((t1 - t0) * rawLen / DUR) / w : Infinity;
 
-      const cached = viewPeakRef.current;
-      if (cached.t0 !== t0 || cached.t1 !== t1) {
-        let peak = 0;
-        if (rawCh) {
-          const iA = Math.max(0, Math.floor((t0 / DUR) * rawLen));
-          const iB = Math.min(rawLen - 1, Math.ceil((t1 / DUR) * rawLen));
-          const stride = Math.max(1, Math.floor((iB - iA) / 2000));
-          for (let i = iA; i <= iB; i += stride) { const v = Math.abs(rawCh[i]); if (v > peak) peak = v; }
-        } else {
-          const N = data.length;
-          const iA = Math.max(0, Math.floor((t0 / DUR) * N));
-          const iB = Math.min(N - 1, Math.ceil((t1 / DUR) * N));
-          for (let i = iA; i <= iB; i++) if (data[i] > peak) peak = data[i];
-        }
-        viewPeakRef.current = { t0, t1, peak };
-      }
-      const gain = viewPeakRef.current.peak > 0.01 ? 0.46 / viewPeakRef.current.peak : 0.5;
+      // Fixed to the whole file's peak (computed once in loadAudio), not the current
+      // view — otherwise the same physical amplitude renders at a different vertical
+      // scale depending on what else happens to be in view, making the waveform jump
+      // as you pan/zoom. yZoomRef is a manual multiplier the user controls via the
+      // +/- buttons in the waveform panel gutter (or the +/- keys) on top of this
+      // fixed baseline.
+      const gain = (fullPeakRef.current > 0.01 ? 0.46 / fullPeakRef.current : 0.5) * yZoomRef.current;
 
       if (rawCh && samplesPerPx <= 2) {
         ctx.strokeStyle = '#c8c6c1'; ctx.lineWidth = 1.5;
@@ -993,15 +1045,18 @@ export default function App() {
       const srcW = Math.round((span / totalSpan) * stripPw);
       ctx.save();
       ctx.setTransform(1, 0, 0, 1, 0, 0);
-      ctx.drawImage(strip, Math.max(0, srcX), 0, Math.max(1, srcW), ph, 0, 0, pw, ph);
+      ctx.drawImage(strip, Math.max(0, srcX), 0, Math.max(1, srcW), strip.height, 0, 0, pw, ph);
       ctx.restore();
     };
 
-    const local = spectroCacheRef.current;
-    const base  = baseSpecCacheRef.current;
+    const local    = spectroCacheRef.current;
+    const overview = overviewCacheRef.current.get(getChunkIndex(t0));
+    const base     = baseSpecCacheRef.current;
 
     if (local.canvas && local.stripT0 <= t0 && local.stripT1 >= t1) {
       blitStrip(local);
+    } else if (overview && overview.canvas && overview.stripT0 <= t0 && overview.stripT1 >= t1) {
+      blitStrip(overview);
     } else if (base.canvas && base.stripT0 <= t0 && base.stripT1 >= t1) {
       blitStrip(base);
     } else if (!sp) {
@@ -1010,7 +1065,7 @@ export default function App() {
       ctx.font = '13px Inter,sans-serif';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText('Click "Enhance Spectrogram" to generate', w / 2, h / 2);
+      ctx.fillText('Click "Force Refresh" to generate', w / 2, h / 2);
       ctx.textAlign = 'left';
     }
 
@@ -1125,7 +1180,7 @@ export default function App() {
     const fillColor   = isWord ? 'rgba(58,123,213,0.18)'  : 'rgba(60,200,130,0.15)';
     const strokeColor = isWord ? 'rgba(58,123,213,0.45)'  : 'rgba(60,200,130,0.4)';
     const editFill    = isWord ? 'rgba(58,123,213,0.30)'  : 'rgba(60,200,130,0.28)';
-    const fontSize    = Math.round(Math.max(11, Math.min(24, rowH * 0.45)));
+    const fontSize    = Math.round(Math.max(11, Math.min(24, rowH * 0.45)) * fontScaleRef.current);
     const font        = isWord ? `500 ${fontSize}px Inter,sans-serif` : `${Math.max(10, fontSize - 1)}px 'JetBrains Mono',monospace`;
     const hoverEdge   = hoverEdgeRef.current;
     const selTiles    = selectedTilesRef.current;
@@ -1248,7 +1303,22 @@ export default function App() {
     }
     drawMinimap();
     drawScrollbar();
+    scheduleSpecPrefetchRef.current();
   }, [drawWave, drawSpec, drawFreqAxis, drawRuler, drawTier, drawMinimap, drawScrollbar]);
+
+  // dir: +1 (zoom in) or -1 (zoom out). Only drawWave() needs to rerun — this is the
+  // one control in the app that provably affects only the waveform canvas.
+  const adjustYZoom = useCallback((dir) => {
+    yZoomRef.current = Math.max(YZOOM_MIN_MULT, Math.min(YZOOM_MAX_MULT,
+      yZoomRef.current * (dir > 0 ? YZOOM_STEP : 1 / YZOOM_STEP)));
+    drawWave();
+  }, [drawWave]);
+
+  const adjustFontScale = useCallback((dir) => {
+    fontScaleRef.current = Math.max(FONT_SCALE_MIN, Math.min(FONT_SCALE_MAX,
+      fontScaleRef.current * (dir > 0 ? FONT_SCALE_STEP : 1 / FONT_SCALE_STEP)));
+    redraw(); // affects all tier canvases (words/phones/custom) — no single-canvas shortcut here
+  }, [redraw]);
 
   // Returns all tier items as { id, items } excluding the given set of tier ids
   const getAllTiers = useCallback(() => [
@@ -1319,13 +1389,81 @@ export default function App() {
     );
   }, [drawSpec]);
 
-  const calcSpecForView = useCallback(async () => {
+  // fetchEnhancedSpec: shared by the manual "Force Refresh" button and the automatic
+  // rolling-buffer prefetch. Both always request a padded window (never the bare
+  // unpadded viewport) — writing an unpadded strip here would leave spectroCacheRef
+  // with zero margin, breaking on the very next pan. pw always scales to keep
+  // pixels-per-second constant across whatever span is requested. Never needs
+  // formants, so always tells the server to skip that (unrelated) computation.
+  const fetchEnhancedSpec = useCallback(async (reqT0, reqT1, { manual = false } = {}) => {
     if (!audioBufferRef.current || !publicWavFileRef.current) return;
-    setSpecComputing(true);
-    const { t0, t1 } = viewRef.current;
+    const myGen = ++specFetchGenRef.current;
+    specFetchInFlightRef.current = performance.now();
+    if (manual) setSpecComputing(true);
     const canvas = specCanvasRef.current;
     const dpr = window.devicePixelRatio || 1;
-    const pw = canvas ? Math.round(canvas.offsetWidth * dpr) : 1400;
+    const viewPw = canvas ? Math.round(canvas.offsetWidth * dpr) : 1400;
+    const ph = canvas ? Math.round(canvas.offsetHeight * dpr) : 400;
+    const { t0: vt0, t1: vt1 } = viewRef.current;
+    const viewSpan = Math.max(1e-6, vt1 - vt0);
+    const pw = Math.max(1, Math.round(viewPw * (reqT1 - reqT0) / viewSpan));
+    try {
+      const res = await fetch('/api/compute-dsp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          wavFile: publicWavFileRef.current,
+          t0: reqT0, t1: reqT1,
+          colormap: colormapNameRef.current,
+          pw, ph,
+          kind: 'spec',
+        }),
+        signal: AbortSignal.timeout(SPEC_FETCH_TIMEOUT_MS),
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      if (myGen !== specFetchGenRef.current) return; // superseded by a newer request — drop
+
+      const { png, pw: spw, ph: sph, stripT0, stripT1 } = data.spec;
+      const offscreen = await pngBase64ToOffscreen(png);
+      spectroCacheRef.current = {
+        canvas: offscreen, ph: sph, stripT0, stripT1, stripPw: spw,
+        params: { colormap: colormapNameRef.current },
+      };
+      drawSpec();
+    } catch (e) {
+      console.error('[fetchEnhancedSpec]', e);
+    } finally {
+      specFetchInFlightRef.current = null;
+      if (manual) setSpecComputing(false);
+    }
+  }, [drawSpec]);
+
+  const computePaddedWindow = useCallback((t0, t1) => {
+    const span = t1 - t0;
+    const pad = span * (SPEC_BUFFER_MULTIPLIER - 1) / 2; // symmetric — total span = 3x viewport
+    return { bufT0: Math.max(0, t0 - pad), bufT1: Math.min(durationRef.current, t1 + pad) };
+  }, []);
+
+  // fetchOverviewChunk: the coarse, fixed-pw "overview" tier — one entry per fixed
+  // OVERVIEW_CHUNK_SEC-sized chunk of the file, cached indefinitely once fetched.
+  // pw is NOT scaled to chunk span (unlike fetchEnhancedSpec) — that's the whole
+  // point: bounded payload regardless of how long the chunk/file is.
+  const fetchOverviewChunk = useCallback(async (chunkIdx) => {
+    if (!audioBufferRef.current || !publicWavFileRef.current) return;
+    const existing = overviewCacheRef.current.get(chunkIdx);
+    if (existing) {
+      // A `pending` entry marks an in-flight fetch. If it's been pending far longer
+      // than a request could plausibly take, its fetch's own catch/finally must have
+      // never run (e.g. an old browser tab/reload race) — treat it as stale and retry
+      // rather than blocking this chunk from ever loading again.
+      const stalePending = existing.pending && (performance.now() - existing.startedAt > SPEC_INFLIGHT_WATCHDOG_MS);
+      if (!stalePending) return; // cached, or a still-plausible in-flight fetch
+    }
+    overviewCacheRef.current.set(chunkIdx, { pending: true, startedAt: performance.now() });
+    const { chunkT0, chunkT1 } = getChunkBounds(chunkIdx, durationRef.current);
+    const canvas = specCanvasRef.current;
+    const dpr = window.devicePixelRatio || 1;
     const ph = canvas ? Math.round(canvas.offsetHeight * dpr) : 400;
     try {
       const res = await fetch('/api/compute-dsp', {
@@ -1333,28 +1471,97 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           wavFile: publicWavFileRef.current,
-          t0, t1,
-          nMels: specNMelsRef.current,
-          nFft: specNFftRef.current,
+          t0: chunkT0, t1: chunkT1,
           colormap: colormapNameRef.current,
-          pw, ph,
+          pw: OVERVIEW_PW, ph,
+          kind: 'spec',
         }),
+        signal: AbortSignal.timeout(SPEC_FETCH_TIMEOUT_MS),
       });
       const data = await res.json();
       if (data.error) throw new Error(data.error);
 
-      const { pixels, pw: spw, ph: sph, stripT0, stripT1 } = data.spec;
-      const imgData = new ImageData(new Uint8ClampedArray(pixels), spw, sph);
-      const offscreen = new OffscreenCanvas(spw, sph);
-      offscreen.getContext('2d').putImageData(imgData, 0, 0);
-      spectroCacheRef.current = { canvas: offscreen, ph: sph, stripT0, stripT1, stripPw: spw };
+      const { png, pw: spw, ph: sph, stripT0, stripT1 } = data.spec;
+      const offscreen = await pngBase64ToOffscreen(png);
+      overviewCacheRef.current.set(chunkIdx, {
+        canvas: offscreen, ph: sph, stripT0, stripT1, stripPw: spw,
+        params: { colormap: colormapNameRef.current },
+      });
       drawSpec();
     } catch (e) {
-      console.error('[calcSpecForView]', e);
-    } finally {
-      setSpecComputing(false);
+      console.error('[fetchOverviewChunk]', e);
+      overviewCacheRef.current.delete(chunkIdx); // allow a later retry
     }
   }, [drawSpec]);
+
+  // Manual "Force Refresh" button — bypasses the prefetch debounce, and backfills
+  // the current view's overview chunk too if it's missing (the only way overview
+  // chunks beyond the initial one ever get fetched for files > OVERVIEW_CHUNK_SEC).
+  const calcSpecForView = useCallback(() => {
+    const { t0, t1 } = viewRef.current;
+    const { bufT0, bufT1 } = computePaddedWindow(t0, t1);
+    fetchOverviewChunk(getChunkIndex(t0)); // no-ops if already cached/pending (see fetchOverviewChunk)
+    return fetchEnhancedSpec(bufT0, bufT1, { manual: true });
+  }, [computePaddedWindow, fetchEnhancedSpec, fetchOverviewChunk]);
+
+  // True if the current view is unbuffered enough (or the cache is stale/absent/mismatched
+  // in colormap) that a fresh enhanced strip should be fetched.
+  const needsSpecRefetch = useCallback(() => {
+    const { t0, t1 } = viewRef.current;
+    const local = spectroCacheRef.current;
+    if (!local.canvas) return true;
+    const p = local.params;
+    if (!p || p.colormap !== colormapNameRef.current)
+      return true;
+    const margin = (t1 - t0) * SPEC_LEAD_TRIGGER_FRAC;
+    return (t0 - margin < local.stripT0) || (t1 + margin > local.stripT1);
+  }, []);
+
+  const scheduleSpecPrefetch = useCallback(() => {
+    if (!audioBufferRef.current || !publicWavFileRef.current) return;
+
+    // Auto-prefetch the overview chunk for wherever the view currently is — not just
+    // on load/colormap-change/manual-refresh — so long files have real overview
+    // coverage to fall back on instead of jumping straight to the base/hint tier
+    // whenever the sharp tier is transiently behind. No-ops if already cached/pending.
+    fetchOverviewChunk(getChunkIndex(viewRef.current.t0));
+
+    // `specFetchInFlightRef` holds a timestamp, not a bare boolean, specifically so a
+    // request that's been "in flight" far longer than SPEC_FETCH_TIMEOUT_MS could ever
+    // legitimately take (its own catch/finally should have already run) doesn't block
+    // prefetching forever — treat it as stale and proceed instead of waiting on it.
+    const inFlightSince = specFetchInFlightRef.current;
+    if (inFlightSince != null && performance.now() - inFlightSince < SPEC_INFLIGHT_WATCHDOG_MS) return;
+    if (!needsSpecRefetch()) { specNeedsSinceRef.current = null; return; }
+
+    const now = performance.now();
+    if (specNeedsSinceRef.current == null) specNeedsSinceRef.current = now;
+
+    // Leading-edge escape: continuous scrolling/dragging resets the trailing debounce
+    // below on every redraw(), which can starve it indefinitely. Once the need has
+    // persisted longer than the max wait, fetch immediately instead of waiting for a
+    // quiet moment that may not come.
+    if (now - specNeedsSinceRef.current >= SPEC_PREFETCH_MAX_WAIT_MS) {
+      if (specPrefetchTimerRef.current) { clearTimeout(specPrefetchTimerRef.current); specPrefetchTimerRef.current = null; }
+      specNeedsSinceRef.current = null;
+      const { t0, t1 } = viewRef.current;
+      const { bufT0, bufT1 } = computePaddedWindow(t0, t1);
+      fetchEnhancedSpec(bufT0, bufT1);
+      return;
+    }
+
+    if (specPrefetchTimerRef.current) clearTimeout(specPrefetchTimerRef.current);
+    specPrefetchTimerRef.current = setTimeout(() => {
+      specPrefetchTimerRef.current = null;
+      specNeedsSinceRef.current = null;
+      if (!needsSpecRefetch()) return; // view may have drifted back within the buffer by now
+      const { t0, t1 } = viewRef.current;
+      const { bufT0, bufT1 } = computePaddedWindow(t0, t1);
+      fetchEnhancedSpec(bufT0, bufT1);
+    }, SPEC_PREFETCH_DEBOUNCE_MS);
+  }, [needsSpecRefetch, computePaddedWindow, fetchEnhancedSpec, fetchOverviewChunk]);
+
+  useEffect(() => { scheduleSpecPrefetchRef.current = scheduleSpecPrefetch; }, [scheduleSpecPrefetch]);
 
   const calcFormantForView = useCallback(async () => {
     if (!audioBufferRef.current || !publicWavFileRef.current) return;
@@ -1367,9 +1574,8 @@ export default function App() {
         body: JSON.stringify({
           wavFile: publicWavFileRef.current,
           t0, t1,
-          nMels: specNMelsRef.current,
-          nFft: specNFftRef.current,
           colormap: colormapNameRef.current,
+          kind: 'formants', // server skips spectrogram computation entirely — see below
         }),
       });
       const data = await res.json();
@@ -1377,12 +1583,10 @@ export default function App() {
 
       formantTrackRef.current = { ...data.formants };
       formantViewRef.current  = { t0, t1 };
-
-      const { pixels, pw: spw, ph: sph, stripT0, stripT1 } = data.spec;
-      const imgData = new ImageData(new Uint8ClampedArray(pixels), spw, sph);
-      const offscreen = new OffscreenCanvas(spw, sph);
-      offscreen.getContext('2d').putImageData(imgData, 0, 0);
-      spectroCacheRef.current = { canvas: offscreen, ph: sph, stripT0, stripT1, stripPw: spw };
+      // data.spec is always null here (kind: 'formants') — the rolling-buffer prefetch
+      // already keeps spectroCacheRef populated; overwriting it with this request's
+      // un-widened, un-scaled strip would clobber a wider prefetched buffer, so this
+      // request never asks the server to compute one in the first place.
 
       if (!showFormantsRef.current) { showFormantsRef.current = true; setShowFormants(true); }
       drawSpec();
@@ -1550,7 +1754,11 @@ export default function App() {
       spectroRef.current = null;
       spectroCacheRef.current = { canvas: null };
       baseSpecCacheRef.current = { canvas: null };
+      overviewCacheRef.current = new Map();
       formantTrackRef.current = null;
+      // Y-zoom is relative to this file's own peak — a new file shouldn't inherit the
+      // previous file's manual multiplier.
+      yZoomRef.current = 1;
     }
 
     audioBufferRef.current = buffer;
@@ -1562,12 +1770,18 @@ export default function App() {
     const ch = buffer.getChannelData(0);
     const N = 4000, step = Math.floor(ch.length / N);
     const peaks = new Float32Array(N);
+    let filePeak = 0;
     for (let i = 0; i < N; i++) {
       let mx = 0;
       for (let j = 0; j < step; j++) { const v = Math.abs(ch[i*step+j] || 0); if (v > mx) mx = v; }
       peaks[i] = mx;
+      if (mx > filePeak) filePeak = mx;
     }
     waveformDataRef.current = peaks;
+    // Each bucket above is already max(|sample|) over its slice, and the buckets
+    // partition the whole file — so this max-of-maxes is the exact full-file peak,
+    // not an approximation, with no extra scan needed.
+    fullPeakRef.current = filePeak;
     rmsEnvRef.current = buildRmsEnvelope(buffer);
     redraw();
 
@@ -1576,6 +1790,7 @@ export default function App() {
     setTimeout(() => {
       spectroCacheRef.current = { canvas: null };
       baseSpecCacheRef.current = { canvas: null };
+      overviewCacheRef.current = new Map();
       if (buffer.duration <= 600) {
         spectroRef.current = buildMelSpectrogram(buffer, COLORMAPS[colormapNameRef.current] || inferno);
         calcBaseSpec(buffer);
@@ -1668,8 +1883,15 @@ export default function App() {
       publicWavFileRef.current = wavName;
       setAudioFileName(wavName.replace(/\.[^.]+$/, ''));
       setSetupError(null);
+      // Kick off the enhanced spectrogram immediately for the starting view ± buffer,
+      // plus the overview chunk covering it — publicWavFileRef wasn't set yet during
+      // loadAudio's own spectrogram setup.
+      const { t0, t1 } = viewRef.current;
+      const { bufT0, bufT1 } = computePaddedWindow(t0, t1);
+      fetchEnhancedSpec(bufT0, bufT1);
+      fetchOverviewChunk(getChunkIndex(t0));
     } catch(e) { console.warn('Audio auto-load failed:', e); }
-  }, [loadAudio, loadTextGrid]);
+  }, [loadAudio, loadTextGrid, computePaddedWindow, fetchEnhancedSpec, fetchOverviewChunk]);
 
   // ── Effects ───────────────────────────────────────────────────────────
 
@@ -1841,10 +2063,21 @@ export default function App() {
         viewRef.current = { t0: newT0, t1: newT0 + span };
         redraw();
       }
+
+      // Context-sensitive +/- : waveform y-zoom, or tile font size if a tier was the
+      // last thing clicked (focusedPanelRef). Ctrl/Cmd+=/- is excluded so the
+      // browser's own page-zoom shortcut still works.
+      const isPlus  = e.key === '+' || e.key === '=' || e.code === 'NumpadAdd';
+      const isMinus = e.key === '-' || e.key === '_' || e.code === 'NumpadSubtract';
+      if (!e.ctrlKey && !e.metaKey && (isPlus || isMinus)) {
+        e.preventDefault();
+        const dir = isPlus ? 1 : -1;
+        if (focusedPanelRef.current === 'tiles') adjustFontScale(dir); else adjustYZoom(dir);
+      }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [stopPlay, startPlay, redraw, popUndo, pushUndo, commitTierItems, clearSelection, saveTextGrid]);
+  }, [stopPlay, startPlay, redraw, popUndo, pushUndo, commitTierItems, clearSelection, saveTextGrid, adjustYZoom, adjustFontScale]);
 
   // ── Zoom ──────────────────────────────────────────────────────────────
 
@@ -1877,7 +2110,7 @@ export default function App() {
 
   // ── Interaction ───────────────────────────────────────────────────────
 
-  const addInteraction = useCallback((canvas, seekable) => {
+  const addInteraction = useCallback((canvas, seekable, panelTag) => {
     if (!canvas) return () => {};
     const onWheel = (e) => {
       e.preventDefault();
@@ -1910,6 +2143,7 @@ export default function App() {
     let onDown = null;
     if (seekable) {
       onDown = (e) => {
+        if (panelTag) focusedPanelRef.current = panelTag;
         const rect = canvas.getBoundingClientRect();
         const startT = xT(e.clientX - rect.left, rect.width);
         let dragged = false;
@@ -1947,7 +2181,7 @@ export default function App() {
 
   useEffect(() => {
     const cleanups = [
-      addInteraction(waveCanvasRef.current, true),
+      addInteraction(waveCanvasRef.current, true, 'waveform'),
       addInteraction(specCanvasRef.current, true),
       // Tier canvases: wheel only (no seek — edit mode handles mousedown separately)
       addInteraction(wordsCanvasRef.current, false),
@@ -2109,6 +2343,7 @@ export default function App() {
 
     const onMouseDown = (e) => {
       if (e.button === 2) return;
+      focusedPanelRef.current = 'tiles';
       if (!editModeRef.current) {
         const rect = canvas.getBoundingClientRect();
         const hit = hitTest(canvas, itemsRef.current, e.clientX, e.clientY);
@@ -2693,13 +2928,18 @@ export default function App() {
     if (!buf) return;
     spectroCacheRef.current = { canvas: null };
     baseSpecCacheRef.current = { canvas: null };
+    overviewCacheRef.current = new Map();
     if (buf.duration <= 600) {
       spectroRef.current = buildMelSpectrogram(buf, COLORMAPS[name] || inferno);
       calcBaseSpec(buf);
     } else {
       drawSpec();
     }
-  }, [calcBaseSpec, drawSpec]);
+    const { t0, t1 } = viewRef.current;
+    const { bufT0, bufT1 } = computePaddedWindow(t0, t1);
+    fetchEnhancedSpec(bufT0, bufT1);
+    fetchOverviewChunk(getChunkIndex(t0));
+  }, [calcBaseSpec, drawSpec, computePaddedWindow, fetchEnhancedSpec, fetchOverviewChunk]);
 
   const handleAudioFile = (e) => { if (e.target.files[0]) loadAudio(e.target.files[0]); };
   const handleTGFile    = (e) => {
@@ -3067,7 +3307,7 @@ export default function App() {
         <div className="spacer" />
         <div className="transport">
           <button className={`btn${loopMode ? ' active' : ''}`} onClick={() => { const n = !loopModeRef.current; loopModeRef.current = n; setLoopMode(n); }} title="Loop selection (L)">
-            ⟲ Loop
+            ⟲<span className="btn-label">Loop</span>
           </button>
           <button
             className={`btn btn-play${playing ? ' paused' : ''}`}
@@ -3087,7 +3327,7 @@ export default function App() {
           <div className="time-display" ref={timeDisplayRef}>
             {fmtTime(playheadRef.current)} / {fmtTime(duration)}
           </div>
-          <span className="zoom-label">Playback speed</span>
+          <span className="zoom-label">SPEED</span>
           <select
             className="colormap-select"
             value={playbackRate}
@@ -3164,7 +3404,7 @@ export default function App() {
           onClick={() => setShowDashboard(v => !v)}
           title="Toggle confidence score distribution panel"
         >
-          ◎ Scores
+          ◎<span className="btn-label">Scores</span>
         </button>
         {/* ── MFA button + queue dropdown ───────────────────────────── */}
         {(() => {
@@ -3175,7 +3415,7 @@ export default function App() {
           const queueCount = pending.length + (running ? 1 : 0);
           const label = running
             ? `⟳ ${running.label} ${running.segT0.toFixed(1)}–${running.segT1.toFixed(1)}s`
-            : '⚙ Run MFA';
+            : '⚙ MFA';
           return (
             <div style={{ position: 'relative' }}>
               <div style={{ display: 'flex' }}>
@@ -3256,7 +3496,7 @@ export default function App() {
             onClick={() => setShowExportPopover(v => !v)}
             title="Export TextGrid"
           >
-            ↓ Export
+            ↓<span className="btn-label">Export</span>
           </button>
           {showExportPopover && (
             <ExportPopover
@@ -3288,8 +3528,8 @@ export default function App() {
             />
           )}
         </div>
-        <label className="load-btn">
-          📄 Load TextGrid
+        <label className="load-btn" title="Load a TextGrid file">
+          📄 Load
           <input type="file" accept=".TextGrid,.textgrid" onChange={handleTGFile} />
         </label>
         <button
@@ -3308,7 +3548,11 @@ export default function App() {
         <div className="timeline-body">
         <div className="panels" ref={panelsDivRef}>
           <div className="panel" ref={wavePanelRef} style={{ flex: panelSplitRef.current }}>
-            <div className="panel-gutter">WV</div>
+            <div className="panel-gutter panel-gutter--wave">
+              <button className="panel-gutter-btn" onClick={() => { focusedPanelRef.current = 'waveform'; adjustYZoom(1); }} title="Zoom in (waveform amplitude)">+</button>
+              <span>WV</span>
+              <button className="panel-gutter-btn" onClick={() => { focusedPanelRef.current = 'waveform'; adjustYZoom(-1); }} title="Zoom out (waveform amplitude)">−</button>
+            </div>
             <div className="panel-body">
               <div className="panel-tag">Waveform</div>
               <canvas ref={waveCanvasRef} style={{ height: '100%' }} />
@@ -3339,43 +3583,14 @@ export default function App() {
                   <option value="greys">Greys</option>
                 </select>
                 <div className="formant-card">
-                  <div className="formant-card__top-row">
-                    <button
-                      className={`formant-card__generate${specComputing ? ' computing' : ''}`}
-                      onClick={calcSpecForView}
-                      disabled={specComputing}
-                      title="Enhance spectrogram resolution for the current view"
-                    >
-                      {specComputing ? '⟳ Enhancing…' : '⟳ Enhance Spectrogram'}
-                    </button>
-                    <button
-                      className={`formant-card__settings-toggle${showSpecSettings ? ' open' : ''}`}
-                      onClick={() => setShowSpecSettings(v => !v)}
-                      title="Spectrogram parameters"
-                    >⚙</button>
-                  </div>
-                  {showSpecSettings && (
-                    <div className="formant-card__settings">
-                      <label className="spec-param-row">
-                        <span>Mel bands</span>
-                        <select value={specNMels} onChange={e => { const v = +e.target.value; setSpecNMels(v); specNMelsRef.current = v; }}>
-                          <option value={40}>40</option>
-                          <option value={80}>80</option>
-                          <option value={128}>128</option>
-                          <option value={160}>160</option>
-                        </select>
-                      </label>
-                      <label className="spec-param-row">
-                        <span>FFT size</span>
-                        <select value={specNFft} onChange={e => { const v = +e.target.value; setSpecNFft(v); specNFftRef.current = v; }}>
-                          <option value={256}>256</option>
-                          <option value={512}>512</option>
-                          <option value={1024}>1024</option>
-                          <option value={2048}>2048</option>
-                        </select>
-                      </label>
-                    </div>
-                  )}
+                  <button
+                    className={`formant-card__generate${specComputing ? ' computing' : ''}`}
+                    onClick={calcSpecForView}
+                    disabled={specComputing}
+                    title="Force an immediate refresh of the enhanced spectrogram for the current view (it otherwise updates automatically as you scroll)"
+                  >
+                    {specComputing ? '⟳ Refreshing…' : '↻ Force Refresh'}
+                  </button>
                 </div>
                 <div className="formant-card">
                   <button
@@ -3453,6 +3668,10 @@ export default function App() {
                 <span style={{ fontSize: 9, fontFamily: "'JetBrains Mono',monospace", color: visible ? 'var(--text-dim)' : 'var(--text-dark)' }}>{label}</span>
               </label>
             ))}
+            <span style={{ display: 'flex', alignItems: 'center', gap: 2, marginLeft: 6 }} title="Tile text size">
+              <button className="panel-gutter-btn" onClick={() => { focusedPanelRef.current = 'tiles'; adjustFontScale(-1); }} title="Decrease tile text size">−</button>
+              <button className="panel-gutter-btn" onClick={() => { focusedPanelRef.current = 'tiles'; adjustFontScale(1); }} title="Increase tile text size">+</button>
+            </span>
             <span style={{ marginLeft: 'auto' }}>
               <label style={{ display: 'flex', alignItems: 'center', gap: 3, cursor: 'pointer' }} title="Auto-play tile audio on click">
                 <input

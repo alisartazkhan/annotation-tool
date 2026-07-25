@@ -44,8 +44,10 @@ src/
   shortcuts.js        ShortcutsPopover content (welcome text + shortcut tables) — edit here, not in App.jsx
   index.css           All styles (uses CSS custom properties — see :root block at top)
 
-dsp_server.py         Python DSP script: librosa mel spectrogram + parselmouth Praat formants
-                      Called by Vite middleware via execFile; requires conda env "aligner"
+dsp_server.py         Python DSP script: librosa linear-frequency STFT spectrogram (displayed on a
+                      mel-warped axis) + parselmouth Praat formants
+                      Run by the Vite middleware as a persistent `--serve` worker (also runnable
+                      as a one-shot CLI for debugging); requires conda env "aligner"
 
 public/
   *.wav               Audio file (exactly one expected)
@@ -206,12 +208,88 @@ There is an always-visible bar at the top of the `.tiers` section with checkboxe
 
 ---
 
+## Waveform Y-Axis (Amplitude) Scaling
+
+**Fixed 2026-07-24 — the waveform used to visibly jump in vertical scale while
+panning/zooming.** `drawWave` previously recomputed its gain from whatever was
+loudest in the *current view* (`viewPeakRef`, keyed by `t0`/`t1`) on every redraw, so
+the same physical amplitude rendered at a different size depending on what else
+happened to be in view. Fixed by switching to a **fixed, whole-file peak**:
+
+```js
+const gain = (fullPeakRef.current > 0.01 ? 0.46 / fullPeakRef.current : 0.5) * yZoomRef.current;
+```
+
+`fullPeakRef` is computed once in `loadAudio`, reusing work already being done there
+for a different purpose: `loadAudio` already builds a 4000-bucket downsampled peak
+array (`waveformDataRef.current` / `peaks`, used elsewhere as the far-zoomed-out
+waveform LOD) where each bucket is already `max(|sample|)` over its slice of the
+file. Since the buckets partition the whole file, `max(peaks)` **is** the exact
+full-file peak — no separate scan needed. `viewPeakRef` and its per-view
+peak-scanning loop were deleted entirely.
+
+### Manual y-zoom control
+
+`yZoomRef` (ref only, no state twin — nothing displays its numeric value) is a
+multiplier on top of the fixed baseline above, adjusted via `adjustYZoom(dir)`
+(`dir`: `+1`/`-1`), which multiplies or divides by `YZOOM_STEP` (1.2) and clamps to
+`[YZOOM_MIN_MULT, YZOOM_MAX_MULT]` (0.25–4). Two ways to trigger it:
+- **+/- buttons** in the waveform panel's gutter (the "WV" label column), above and
+  below the label.
+- **+/- keys**, but only when the waveform was the last thing clicked — see
+  [Keyboard shortcut context](#keyboard-shortcut-context-waveform-vs-tiles) below.
+
+`adjustYZoom` calls `drawWave()` directly rather than the full `redraw()` — the one
+control in the app that provably affects only the waveform canvas, so there's no need
+to repaint the spectrogram/tiers/minimap/scrollbar or re-run `scheduleSpecPrefetch()`
+on every click/keypress.
+
+**Reset on file load**: `yZoomRef.current = 1` in `loadAudio`'s per-file reset block
+— y-zoom is relative to *this file's* own peak, so a newly loaded file shouldn't
+inherit the previous file's manual multiplier. Contrast with `fontScaleRef` below,
+which is deliberately *not* reset per file (see [Tile Rendering — Font
+Scaling](#tile-rendering--font-scaling)).
+
+### Keyboard shortcut context (waveform vs. tiles)
+
+`focusedPanelRef` (ref only — `'waveform'` or `'tiles'`, defaults to `'waveform'` so
+the shortcut works before any click) tracks which panel was last clicked, so the same
+`+`/`-` keys can drive two different controls depending on context:
+- Set to `'waveform'` inside `addInteraction`'s `onDown` (`App.jsx`) — only when a
+  panel tag is passed to `addInteraction(canvas, seekable, panelTag)`; only the
+  waveform canvas's call site passes one (`'waveform'`), so spectrogram-panel clicks
+  (which also go through `addInteraction`) don't affect this — they're intentionally
+  a no-op for this tracking.
+- Set to `'tiles'` inside `addTierEditInteraction`'s `onMouseDown`, immediately after
+  the existing `if (e.button === 2) return;` guard (which must stay first — see [Key
+  Invariants](#key-invariants-and-non-obvious-constraints)). This one function backs
+  words/phones/all custom tier canvases, so a single write site covers every tier.
+- Also set directly in each of the four +/- buttons' own `onClick` handlers (waveform
+  panel-gutter and SHOW-bar), not just on canvas clicks — clicking a +/- button without
+  having clicked its panel first should still make that the active context for the
+  *next* keypress. Each button sets the ref to its own panel before calling
+  `adjustYZoom`/`adjustFontScale`, e.g. `onClick={() => { focusedPanelRef.current = 'waveform'; adjustYZoom(1); }}`.
+
+The keydown handler branches on it:
+```js
+if (!e.ctrlKey && !e.metaKey && (isPlus || isMinus)) {
+  e.preventDefault();
+  if (focusedPanelRef.current === 'tiles') adjustFontScale(dir); else adjustYZoom(dir);
+}
+```
+The `!e.ctrlKey && !e.metaKey` guard is required so this doesn't hijack the browser's
+own Ctrl/Cmd+=/− page-zoom shortcut. `+`/`-` are matched via `e.key === '+'/'='` and
+`e.key === '-'/'_'` plus the `NumpadAdd`/`NumpadSubtract` codes, so both the shifted
+and unshifted main-row keys and the numpad work regardless of layout.
+
+---
+
 ## Tile Rendering — Font Scaling
 
 `drawTier` scales annotation text with tier height so tiles remain readable at any zoom level:
 
 ```js
-const fontSize = Math.round(Math.max(11, Math.min(24, rowH * 0.45)));
+const fontSize = Math.round(Math.max(11, Math.min(24, rowH * 0.45)) * fontScaleRef.current);
 const font = isWord
   ? `500 ${fontSize}px Inter,sans-serif`
   : `${Math.max(10, fontSize - 1)}px 'JetBrains Mono',monospace`;
@@ -220,6 +298,22 @@ ctx.fillText(item.text, (x0 + x1) / 2, ry + rowH / 2 + fontSize * 0.35);
 ```
 
 Word tiles use a slightly heavier weight (`500`); phoneme tiles use a monospace font one pixel smaller for density.
+
+### Manual font-size control (2026-07-24)
+
+`fontScaleRef` (ref only, no state twin — nothing displays its numeric value) is a
+multiplier on top of the row-height auto-scaling above, independent of it rather than
+replacing it. Adjusted via `adjustFontScale(dir)` (`dir`: `+1`/`-1`), which multiplies
+or divides by `FONT_SCALE_STEP` (1.15) and clamps to `[FONT_SCALE_MIN, FONT_SCALE_MAX]`
+(0.7–2). Two ways to trigger it:
+- **+/- buttons** in the always-visible tier-visibility ("SHOW") bar, next to the
+  WRD/PHN checkboxes.
+- **+/- keys**, but only when a tier was the last thing clicked — see
+  [Keyboard shortcut context](#keyboard-shortcut-context-waveform-vs-tiles) below.
+
+Deliberately **not** reset when a new file loads (unlike the waveform's y-zoom below)
+— it's a display/accessibility preference independent of any particular file's data,
+so it should persist across loads within a session.
 
 ---
 
@@ -383,7 +477,7 @@ Three dev-only endpoints are registered:
 |---|---|---|
 | `/api/public-files` | GET | Lists `*.wav` and `*.TextGrid` files in `public/` for auto-load |
 | `/api/save-textgrid` | POST | Writes serialized TextGrid to `public/<filename>.TextGrid` |
-| `/api/compute-dsp` | POST | Shells out to `dsp_server.py` for mel spectrogram + formants |
+| `/api/compute-dsp` | POST | Talks to a persistent `dsp_server.py --serve` worker for spectrogram (linear STFT, mel-warped display axis) + formants |
 
 #### Python path resolution
 
@@ -568,30 +662,53 @@ Words not in the dictionary are automatically substituted with the nearest Leven
 
 ## Spectrogram System
 
-Two-level cache:
+Rewritten 2026-07 to auto-render a high-res spectrogram as you scroll instead of requiring a manual button click every time. No user-facing tuning controls anymore — the old ⚙ mel-bands/FFT-size dropdown was removed; window size and hop are derived automatically (see below).
+
+Three-tier cache, checked in priority order by `drawSpec` via simple containment (`stripT0 <= t0 && stripT1 >= t1`): **local (sharp) → overview → base → hint text** (*"Click 'Force Refresh' to generate"*).
 
 | Cache | Ref | Coverage | How computed |
 |---|---|---|---|
-| Base | `baseSpecCacheRef` | Full audio duration | `calcBaseSpec` — JS worker (`specWorker.js`), N_FFT=2048, hop=512. Skipped for audio > 10 min. |
-| Local | `spectroCacheRef` | Current view | `calcSpecForView` — Python/librosa via `/api/compute-dsp`. User-triggered via "Enhance Spectrogram" button. |
+| Local (sharp) | `spectroCacheRef` | Rolling ~3x-viewport buffer around the current view | `fetchEnhancedSpec` — Python/librosa via `/api/compute-dsp`, pixel width scaled to match the canvas's actual pixel density. Auto-prefetches as you scroll/zoom — see below. |
+| Overview | `overviewCacheRef` (`Map`, keyed by chunk index) | Fixed `OVERVIEW_CHUNK_SEC` (300s) chunks of the file | `fetchOverviewChunk` — Python/librosa via `/api/compute-dsp`, **fixed** `OVERVIEW_PW=1800` pixel width regardless of chunk length, so payload stays bounded (~13–14MB) no matter how long the chunk/file is. Only the chunk containing the *initial* view auto-fetches on load; other chunks only fetch when "↻ Force Refresh" is clicked while viewing them. |
+| Base | `baseSpecCacheRef` | Full audio duration | `calcBaseSpec` — JS worker (`specWorker.js`), fixed N_FFT=2048/hop=512, mel-binned. Skipped for audio > 10 min. Legacy fallback, unchanged by this rewrite. |
 
-### Base spec (on load)
+### Analysis parameters (matches Audacity's own Spectrogram Settings defaults)
 
-`calcBaseSpec(buf)` is called from `loadAudio` **only when `buf.duration <= 600` (10 min)**. For longer audio, `spectroRef.current` is left `null` and the base spec worker is not started — skipping the large memory allocation and main-thread blocking of passing the full `Float32Array` to the worker.
+`dsp_server.py` no longer builds a mel filterbank (averaging linear bins into broad filters silently throws away frequency detail). It runs a full **linear-frequency STFT** and only warps the *display* axis onto a mel scale per output pixel row (`_resize_to_mel_pixels`) — the frequency axis still reads mel-ish, but no analysis-time detail is discarded.
 
-When no spec data is available, `drawSpec` renders a grey hint text: *"Click 'Enhance Spectrogram' to generate"*.
+As of 2026-07-24 the window/FFT/dB parameters are hardcoded to match Audacity's own Spectrogram Settings dialog defaults exactly (confirmed against a screenshot of that dialog), rather than being derived from the file's sample rate:
 
-### Enhanced spec (on demand)
+- `WIN_LENGTH = 2048` samples, `window='hann'`, `ZERO_PADDING_FACTOR = 2` → `N_FFT = 4096` (librosa zero-pads the Hann-windowed frame out to `N_FFT` via `win_length=WIN_LENGTH` on the `librosa.stft` call). **Replaces** the old `n_fft = next_pow2(sample_rate * 0.023s)` (`TARGET_WINDOW_SEC`) scheme, which assumed Audacity defaulted to a ~1024-sample window at 44.1kHz — that assumption was wrong (Audacity's actual default is a **fixed 2048 samples regardless of sample rate**) and the old scheme additionally had its own rounding bug (`_next_pow2` ceiling-rounds, so e.g. 48kHz got a noticeably wider window than the 23ms target implied). Hardcoding to Audacity's literal default fixes both issues at once.
+- `FMIN_HZ = 1.0`, `FMAX_HZ = 8000.0` — passed into `_resize_to_mel_pixels`'s mel-axis warp (previously the bottom row was implicitly pinned to 0 Hz; the 1 Hz floor is Audacity's literal default and is visually indistinguishable from 0 Hz at this scale).
+- `GAIN_DB = 20.0`, `RANGE_DB = 80.0` — a **best-effort approximation** of Audacity's fixed absolute-dB color mapping (`S_norm = clip((S_db + GAIN_DB + RANGE_DB) / RANGE_DB, 0, 1)`), replacing the old per-tile adaptive min/max contrast stretch (`(S_db - vmin) / (vmax - vmin)`) so a given absolute loudness now maps to a consistent color regardless of zoom level or which region is being viewed. **Not verified bit-for-bit against Audacity's real internal formula** (its exact window-energy normalization convention isn't known here) — retune these two constants if the spectrogram looks too dark or washed out.
+  - Getting the *reference level* right for this was not trivial: `librosa.stft`'s raw `|D|` is not calibrated to any absolute amplitude convention, so an initial attempt using `ref=1.0` in `power_to_db` produced dB values dozens of dB too high and saturated nearly the entire display to max brightness (verified empirically before shipping). `REF_POWER = (sum(hann_window)/2)**2` — the STFT power a full-scale (amplitude=1.0) sinusoid would produce under this exact window — is used instead, so `0 dB` means "a full-scale tone," the standard spectrum-analyzer convention. Without this, `GAIN_DB`/`RANGE_DB` don't mean anything as fixed thresholds.
+- `hop = max(16, min(WIN_LENGTH, floor(len(slice) / pw)))` — always computes at least as many real STFT frames as requested pixel columns, so zooming in doesn't fall back to interpolating between too few real frames (this was the original cause of "blur regardless of zoom"). Unchanged by the above — hop is about display resolution, not analysis window size.
+- "Roseus" (Audacity's default colorscheme) was **not** added — the exact RGB color-stop values weren't available with confidence, and fabricating scientific colormap data was judged worse than leaving the existing inferno/viridis/jet/greys options as-is. The colormap dropdown is unchanged.
 
-`calcSpecForView` POSTs to `/api/compute-dsp` with the current view's `t0`/`t1`, canvas pixel dimensions (`pw`/`ph`), mel bands, and FFT size. Python returns RGBA pixels at the exact canvas resolution — no interpolation mismatch. The result is stored in `spectroCacheRef` and renders correctly regardless of whether the base spec was computed.
+Every `/api/compute-dsp` request decodes only a small padded region of the WAV around `[t0,t1]` (`dsp_server.py` `handle_request()`, `pad_sec=0.5`) — for files ≤10 minutes this is now a numpy slice of an in-memory cached decode rather than a fresh disk read every time (see [Persistent worker](#persistent-worker-latency) below). `kind: 'spec'` is sent by both the local and overview tiers (they never use the `formants` field, and the server skips computing it entirely); the dedicated "Generate Formants" button sends `kind: 'formants'` instead (skips the spectrogram computation entirely, since that response's `spec` field is always discarded client-side anyway).
 
-Parameters are user-configurable via the ⚙ dropdown on the "Enhance Spectrogram" button:
-- `specNMelsRef` — mel bands (40 / 80 / 128 / 160), default 128
-- `specNFftRef` — FFT size (256 / 512 / 1024 / 2048), default 512
+### Auto-prefetch (rolling sharp-tier buffer)
+
+- `computePaddedWindow(t0,t1)` — symmetric ±1-viewport padding (3x total span, `SPEC_BUFFER_MULTIPLIER`).
+- `needsSpecRefetch()` — true if `spectroCacheRef` is empty, its stamped `colormap` param is stale, or the current view has come within `SPEC_LEAD_TRIGGER_FRAC` (50%) of a viewport-width of either edge of the cached strip.
+- `scheduleSpecPrefetch()` — called from `redraw()` (the one choke point all ~11 view-mutation call sites already hit) on every frame. Debounced (`SPEC_PREFETCH_DEBOUNCE_MS=50ms`) on a trailing edge, but with a leading-edge max-wait escape (`SPEC_PREFETCH_MAX_WAIT_MS=100ms`): once `needsSpecRefetch()` has stayed true continuously longer than the max wait, it force-fetches immediately instead of waiting for a quiet moment — added because continuous scroll/drag/playback-autoscroll was resetting the trailing debounce indefinitely and starving the healing fetch. **Tuned down from 220ms/800ms on 2026-07-24**: those values were conservative to avoid hammering the old cold-subprocess-per-request backend (~800ms-3s per call); now that the [persistent worker](#persistent-worker-latency) makes a warm request ~15-20ms, a fetch can be dispatched almost immediately during fast scrolling without meaningfully loading the backend, and the old values were showing up as visible lag purely from scheduling delay, independent of how fast the backend itself had become.
+- Also calls `fetchOverviewChunk(getChunkIndex(t0))` on every invocation (added 2026-07-24) — not just on load/colormap-change/manual-refresh — so long files (> `OVERVIEW_CHUNK_SEC`) get real overview coverage as you navigate instead of relying entirely on the local tier staying caught up. No-ops if that chunk is already cached or in flight.
+- Gated by `specFetchInFlightRef`, which holds a `performance.now()` timestamp (not a bare boolean) while a `fetchEnhancedSpec` call is outstanding, `null` otherwise. `scheduleSpecPrefetch` proceeds if it's `null` **or** it's been set for longer than `SPEC_INFLIGHT_WATCHDOG_MS` (`SPEC_FETCH_TIMEOUT_MS * 2`) — see the fixed bug below for why the watchdog exists.
+
+**Fixed 2026-07-24 — sharp tier could get stuck on the coarse overview/base fallback forever.** Previously documented here as an unresolved bug: the sharp tier would sometimes stay on the coarser fallback persistently (not just a sub-second gap) after navigating to a new part of the timeline, with no self-healing even after several seconds. Root-caused to: `specFetchInFlightRef` was a plain boolean set `true` at the start of `fetchEnhancedSpec` and reset to `false` in **exactly one place** — that function's own `finally` block. Neither the frontend `fetch('/api/compute-dsp')` call nor the backend `execFile` call to `dsp_server.py` had any timeout, so if a request ever hung (plausible: `dsp_server.py` pays a real, variable cold-subprocess interpreter/import cost per call, with no concurrency cap in the Vite middleware to bound contention from overlapping sharp/overview/formant requests), its `finally` would never run, `specFetchInFlightRef` would stay `true` for the rest of the session, and `scheduleSpecPrefetch`'s very first line (`if (specFetchInFlightRef.current) return;`) would then silently drop every future automatic prefetch attempt — including the `SPEC_PREFETCH_MAX_WAIT_MS` escape hatch that's specifically supposed to guarantee eventual refresh, since that logic sat behind the same gate. Fixed with three changes, all still present as of this writing:
+1. `vite.config.js` now bounds every request to `DSP_TIMEOUT_MS` (15s) so a hung/slow `dsp_server.py` response resolves as an error instead of hanging forever. Originally implemented via `execFile`'s built-in `timeout` option; when `dsp_server.py` moved to a persistent `--serve` worker (see [Persistent worker](#persistent-worker-latency) below), `execFile` was replaced by `spawn`, which has no per-call timeout equivalent — `runDsp()`'s own `setTimeout(..., DSP_TIMEOUT_MS)` per request took over the same guarantee.
+2. `fetchEnhancedSpec`/`fetchOverviewChunk`'s `fetch()` calls now pass `signal: AbortSignal.timeout(SPEC_FETCH_TIMEOUT_MS)` (20s) as an independent frontend-side backstop.
+3. `specFetchInFlightRef` (and `fetchOverviewChunk`'s `{ pending }` placeholder) now store a timestamp instead of a bare boolean, so `scheduleSpecPrefetch`/`fetchOverviewChunk` can route around a marker that's been set for implausibly long (`SPEC_INFLIGHT_WATCHDOG_MS`) rather than trusting it forever — defense in depth in case a future change reintroduces an unbounded path.
+
+### Manual "Force Refresh"
+
+`calcSpecForView` — button handler, relabeled from the old "⟳ Enhance Spectrogram" (now "↻ Force Refresh"). Bypasses the debounce: calls `fetchEnhancedSpec(computePaddedWindow(t0,t1), {manual: true})` directly, and also backfills the current view's overview chunk via `fetchOverviewChunk` if missing — the only way overview chunks beyond the initial one ever get fetched for files longer than `OVERVIEW_CHUNK_SEC`.
+
+`calcFormantForView` (the separate "Generate Formants" button) intentionally does **not** touch `spectroCacheRef` — it discards the spectrogram data in its response so it can't clobber a wider prefetched buffer with an unpadded strip.
 
 ### Cache hit check
 
-`drawSpec` blits `spectroCacheRef` when `local.stripT0 <= t0 && local.stripT1 >= t1` (no `ph` check — Python returns pixels at the exact requested dimensions so height always matches). Falls back to `baseSpecCacheRef` when the local cache doesn't cover the view. The blit logic is **outside** the `if (sp)` guard so it runs even when `spectroRef` is null (long audio case).
+`drawSpec` blits whichever tier's cached strip contains the current view (see priority order above) — no `ph` check needed, since Python returns pixels at the exact requested dimensions. `blitStrip` uses the cached strip's own `.height`, not the live canvas height, as the `drawImage` source-rect height (a real bug, fixed 2026-07 — using the live canvas height here caused a black band across the bottom of the panel whenever the panel grew taller than it was when a strip was cached). The blit logic is **outside** the `if (sp)` guard so it runs even when the base spec is `null` (long audio case).
 
 ### Long audio memory warning
 
@@ -601,18 +718,35 @@ For audio over 30 minutes (`duration > 1800`), `loadAudio` sets `memoryWarning` 
 
 ```js
 POST /api/compute-dsp
-Body: { wavFile, t0, t1, nMels, nFft, colormap, pw, ph }
+Body: { wavFile, t0, t1, colormap, pw, ph, kind }   // kind: 'spec' | 'formants' | 'both'
 ```
 
-Shells out to `dsp_server.py` via `execFile` with `maxBuffer: 50 MB`. Returns:
+Returns:
 ```json
 {
-  "spec":     { "pixels": [...], "pw": N, "ph": N, "stripT0": N, "stripT1": N },
-  "formants": { "f1": [...], "f2": [...], "f3": [...], "times": [...], "regionT0": N, "sr": N }
+  "spec":     { "png": "<base64 PNG>", "pw": N, "ph": N, "stripT0": N, "stripT1": N } | null,
+  "formants": { "f1": [...], "f2": [...], "f3": [...], "times": [...], "regionT0": N, "sr": N } | null
 }
 ```
+`spec`/`formants` are `null` when `kind` didn't request them (`compute_spectrogram`/`compute_formants` are skipped server-side entirely, not just discarded after computing).
 
-Only works in dev (Vite server must be running). Requires the `aligner` conda env to be present with `librosa` and `praat-parselmouth` installed.
+Only works in dev (Vite server must be running). Requires the `aligner` conda env to be present with `librosa`, `praat-parselmouth`, and `pillow` installed.
+
+### Persistent worker (latency)
+
+As of 2026-07-24, `/api/compute-dsp` is backed by a **persistent `dsp_server.py --serve` process** instead of a fresh subprocess per request. This was a follow-up to the sharp-tier-stuck bug fix above: that fix stopped the sharp tier from getting permanently wedged, but each request was still slow — every `execFile` call re-imported `numpy`/`librosa`/`soundfile`/`parselmouth` from scratch, a real fixed cost per request regardless of how small the actual DSP work was. Measured effect of this change: a cold request is still ~0.8s (interpreter/import startup, paid once when the worker first spawns), but every subsequent request against an already-open file dropped to ~15–20ms — the sharp tier can now actually keep up while panning, not just avoid getting stuck.
+
+**Protocol** (`dsp_server.py` module docstring has the authoritative shape): the Vite middleware writes one JSON line (`{ id, wavFile, t0, t1, colormap, pw, ph, kind }`) to the worker's stdin per request and reads one JSON line back per response, correlated by an incrementing `id` — multiple requests can be in flight from the frontend (e.g. a sharp-tier fetch and an overview-chunk fetch concurrently), but the worker itself processes them strictly **FIFO, one at a time** (see the tradeoff note below).
+
+**`vite.config.js`**: `getDspWorker()` lazily spawns the worker and parses newline-delimited JSON off its stdout; `runDsp(req)` writes a request and returns a promise resolved/rejected by the matching response `id`. `runDsp`'s own `setTimeout(DSP_TIMEOUT_MS)` per request is what replaced `execFile`'s timeout (see above) — a response arriving after its own timeout already fired is dropped silently (matched against a pending map entry that's already been deleted), not treated as an error. If the worker process exits/errors, every pending request is immediately rejected and the worker is respawned on the next call. `server.httpServer.once('close', ...)` kills the worker when the dev server stops, so restarting `npm run dev` doesn't accumulate orphaned Python processes.
+
+**`dsp_server.py`**: `serve_loop()` wraps each request line in its own `try/except` — unlike the one-shot CLI mode (where a crash just kills a throwaway subprocess), an uncaught exception here would strand every other in-flight/queued request, so a bad request (bad path, decode failure, ...) reports `{ id, error }` on its own response line and the worker keeps running. `handle_request()` is shared by both the `--serve` and CLI (argv) code paths.
+
+**In-memory audio cache** (`_get_audio_slice`, single entry keyed by path + mtime): for files ≤10 minutes (mirrors the existing threshold used for the JS base-spectrogram cache), the whole file is decoded once and cached; every subsequent request against it is a numpy slice, not a fresh disk read + resample — this is most of why repeat requests are so much faster than the cold one. Longer files keep the old per-request padded-window decode (bounded/cheap already) to avoid a large upfront memory/time cost. Only raw audio samples are cached, never spectrogram data — full-file mel-spectrogram caching was deliberately not added, since it would reintroduce the frequency-detail loss this codebase moved away from (see "Analysis parameters" above); the STFT itself still runs per-request on the padded window.
+
+**PNG payload**: `compute_spectrogram`'s response field is `png` (a base64-encoded PNG, via Pillow) instead of the old flat `pixels` number array — much smaller and much faster for both Python (`json.dumps`) and the browser to handle. Frontend decode is `pngBase64ToOffscreen()` (`App.jsx`): base64 → `Blob` → `createImageBitmap` → drawn onto an `OffscreenCanvas`, replacing the old `ImageData`/`putImageData` path.
+
+**Known tradeoff — single worker, no pool**: since the worker processes requests strictly FIFO, a genuinely slow request (a `kind: 'formants'` call, or `kind: 'both'`) blocks every request queued behind it for its full duration — verified directly: an artificially delayed request caused a second, otherwise-fast request issued immediately after it to also time out, because it was still waiting in the queue. This is an accepted tradeoff (formants requests are manual/occasional; `spec` requests are now fast) rather than a bug — if queueing delay becomes a real problem in practice, a small worker pool is the natural next step, not implemented here to keep this change scoped.
 
 ### Frequency axis
 
@@ -766,6 +900,7 @@ Note: the blue tile color and the green dashboard color are independent — `dra
 | Shift+click | Range-select tiles from the last-selected tile to the clicked tile (edit mode) |
 | Ctrl/Cmd+click (or drag) | Same range-select as Shift+click (edit mode); the toggle-selection variant is dead/commented-out code in the tier mousedown handler |
 | Arrow Left/Right | Pan by 20% of view |
+| `+`/`-` (or `=`/`_`, numpad +/-) | Waveform y-zoom, or tile font size if a tier was last clicked — see [Keyboard shortcut context](#keyboard-shortcut-context-waveform-vs-tiles) |
 
 The edit mode hotkey is hardcoded to `1` in the keydown handler. The check matches `e.code`, `e.key`, and the `Numpad1` alias so numpad `1` works regardless of NumLock state.
 
@@ -792,7 +927,7 @@ The edit mode hotkey is hardcoded to `1` in the keydown handler. The check match
   --warn-*, --error-*, --save-*                   /* status-color families (keep hue across themes) */
   --mfa-*, --export-*, --tier-*                   /* semantic button families (keep hue across themes) */
   --mono                                /* "JetBrains Mono", monospace */
-  --toolbar-btn-h                       /* 34px */
+  --toolbar-btn-h                       /* 28px */
 }
 ```
 
@@ -818,9 +953,19 @@ Notable component classes:
 
 ### Toolbar button height normalization
 
-Every button/control inside `.toolbar` (`.btn`, `.load-btn`, `.btn-edit-split`, `.colormap-select`) is pinned to one shared height via the `--toolbar-btn-h` CSS variable (currently `34px`, defined in `:root`), plus `display: flex; align-items: center; justify-content: center;` so label text stays vertically centered regardless of font-size differences between button variants. `white-space: nowrap` on `.toolbar .btn`/`.load-btn` stops icon+label text (e.g. `◎ Scores`, `▶ Play`) from wrapping onto two lines when the toolbar is tight on space.
+Every button/control inside `.toolbar` (`.btn`, `.load-btn`, `.btn-edit-split`, `.colormap-select`) is pinned to one shared height via the `--toolbar-btn-h` CSS variable (currently `28px`, defined in `:root`), plus `display: flex; align-items: center; justify-content: center;` so label text stays vertically centered regardless of font-size differences between button variants. `white-space: nowrap` on `.toolbar .btn`/`.load-btn` stops icon+label text (e.g. `◎ Scores`, `▶ Play`) from wrapping onto two lines when the toolbar is tight on space.
 
 These rules are scoped with a `.toolbar` ancestor selector (`.toolbar .btn`, not bare `.btn`) so they don't affect the same class names reused in popovers/modals (Export popover, Tier-name popover, MFA word-picker modal), which are deliberately more compact. If you add a new toolbar control, give it one of the classes above (or add it to the scoped rule) rather than hand-tuning its padding — that's what caused the original height mismatch (no button class set an explicit `height`; each one's rendered height was just whatever `padding + font-size + border` happened to add up to).
+
+### Toolbar responsiveness (2026-07-24)
+
+**Fixed — the toolbar used to overflow/get cut off at narrow window widths** with no wrapping or overflow handling at all (`.toolbar` was a fixed-height, non-wrapping flex row). Three changes, layered so nothing is ever hidden outright:
+
+1. **Shrunk the chrome itself, unconditionally**: `--toolbar-btn-h` `34px → 28px`, and `.toolbar .btn`/`.load-btn` horizontal padding `15px → 10px`. Free space savings with no behavior tradeoff.
+2. **Shortened three verbose labels** that had no functional value beyond their icon + a word: `"📄 Load TextGrid"` → `"📄 Load"` (added a `title` tooltip to keep it discoverable), `"Playback speed"` label → `"SPEED"` (brings it in line with the already-terse `"ZOOM"` label convention — the *options* in this same dropdown were already trimmed for the same reason, but the label next to it never was, until now), `"⚙ Run MFA"` → `"⚙ MFA"`.
+3. **`.toolbar` now wraps** (`flex-wrap: wrap`, `min-height` instead of a fixed `height`) as the fallback safety net — nothing gets cut off, it just grows to a second row if it has to.
+4. **Loop/Scores/Export collapse to icon-only below 1100px** (an estimate — retune by resizing and watching where wrapping actually kicks in) to buy back room before wrapping is needed at all. Each button's word is a separate `<span className="btn-label">`, hidden via `@media (max-width: 1100px) { .toolbar .btn-label { display: none; } }`.
+   - **Gotcha hit while building this**: `.btn-label`'s gap from the icon is a CSS `margin-left`, not a leading space character in the JSX text (i.e. not `<span> Loop</span>`). `.toolbar .btn` is `display: flex`, which makes the icon and the label separate flex items — a leading space *inside* the span's own text sits at the start of that span's own box and gets trimmed by whitespace-collapsing, silently rendering as `"⟲Loop"` instead of `"⟲ Loop"`. Margin-based spacing doesn't have this problem.
 
 **`.zoom-label`** (despite the name) is the shared convention for a small muted inline label placed before a compact toolbar control — used for both `ZOOM` (before the zoom slider) and `Playback speed` (before the playback-rate `<select>`). Prefer it over repeating the label text inside every `<option>` (the old playback-speed dropdown did this — `Playback speed: 1×`, `Playback speed: 1.25×`, etc. — which made the closed `<select>` itself wide and repetitive; the label was pulled out into its own span and the options trimmed to just `1×`, `1.25×`, ...).
 
@@ -924,7 +1069,9 @@ This must stay in `index.html`, not move into a React effect — React can't run
 
 - **`ipa_keys.json` must have no trailing comma** after the last entry. The browser's `JSON.parse` is strict; a trailing comma produces an empty keyboard silently.
 
-- **Right-click check `if (e.button === 2) return` must be the first statement** in `onMouseDown`. Any hit-testing before this check causes unwanted tier selection on right-click.
+- **Right-click check `if (e.button === 2) return` must be the first statement** in `onMouseDown`. Any hit-testing before this check causes unwanted tier selection on right-click. `focusedPanelRef.current = 'tiles'` in `addTierEditInteraction`'s `onMouseDown` is placed immediately after this check, not before — it must not run on a right-click that's about to be ignored anyway.
+
+- **`focusedPanelRef` only updates from the *canvas* it's tagged for, not every `addInteraction` caller.** `addInteraction(canvas, seekable, panelTag)`'s third param is optional and only the waveform canvas's call site passes one (`'waveform'`) — the spectrogram canvas also goes through `addInteraction` but intentionally has no tag, so clicking it doesn't change which control `+`/`-` keys drive.
 
 - **Edit mode is on by default.** Both `useState(true)` and `useRef(true)` must match — if you change the default, update both.
 
@@ -952,9 +1099,9 @@ This must stay in `index.html`, not move into a React effect — React can't run
 
 - **`calcSpecForView` and `calcFormantForView` both require `publicWavFileRef.current` to be set.** This ref is only populated when the wav was auto-loaded from `public/` — it is `null` for any other source. Both functions guard on it and return early if null.
 
-- **Do not name local variables `pw`/`ph` in the same scope as the destructured `data.spec`.** `const { pixels, pw, ph } = data.spec` will conflict with any outer `const pw`/`const ph` in the same block, causing a `ReferenceError: Cannot access uninitialized variable`. Use aliased destructuring: `const { pixels, pw: spw, ph: sph } = data.spec`.
+- **Do not name local variables `pw`/`ph` in the same scope as the destructured `data.spec`.** `const { png, pw, ph } = data.spec` will conflict with any outer `const pw`/`const ph` in the same block, causing a `ReferenceError: Cannot access uninitialized variable`. Use aliased destructuring: `const { png, pw: spw, ph: sph } = data.spec`.
 
-- **The `spectroCacheRef` local cache has no `ph` equality check.** Python returns pixels at exactly the requested canvas dimensions, so the height always matches. The old JS worker path stored `ph` and checked it; that check has been removed.
+- **The `spectroCacheRef` local cache has no `ph` equality check.** The PNG's own bitmap dimensions always match the requested canvas dimensions, so the height always matches. The old JS worker path stored `ph` and checked it; that check has been removed.
 
 - **`src.onended` must be guarded by `gen !== playGenRef.current` before `!playingRef.current`.** Calling `src.stop()` always fires `onended` — even when stopping manually to start a new source. The generation check must come first; if stale, return immediately so the old source's `onended` cannot touch `playheadRef`, kill the new source, or call `setPlaying(false)`.
 
@@ -1006,12 +1153,9 @@ When `/api/public-files` returns more than one `.wav` or `.TextGrid`, the app re
 
 Follow-ups to pick up next session — flag any of these and we can plan/implement from here:
 
-1. Make the toolbar resizable/responsive with the window, instead of overflowing/wrapping at narrow widths.
-2. Fix spectrogram rendering problems — see [Spectrogram System](#spectrogram-system). Specifically: can "Enhance Spectrogram" run before/while the audio loads, instead of only on demand after, so it isn't recomputing constantly during normal use?
-3. Waveform y-axis (amplitude) should stay consistent across the whole file instead of rescaling as you scroll/zoom — but still let the user manually zoom the y-axis if they want. See `drawWave`.
-4. Add a font-size control (slider) near the WRD/PHN visibility checkboxes so users can manually bump up tile text size, independent of the current auto-scaling by row height (see [Tile Rendering — Font Scaling](#tile-rendering--font-scaling)).
-5. Audit the codebase for dead code and clean it up — candidates already flagged elsewhere in this doc: the commented-out Split Edit Button UI/state (see [Split Edit Button (removed)](#split-edit-button-removed)), `formantWorker.js` (superseded by `dsp_server.py`), and the `audioFileName` state (set on every load but no longer displayed anywhere — see [File Picker](#file-picker-filepicker-component)).
-6. Clarify save behavior — see [Save to Disk](#save-to-disk-ctrlcmds). Does `Ctrl/Cmd+S` silently overwrite the existing TextGrid on disk? If so, show the user a confirmation popup before/when that overwrite happens.
-7. Fix issues in formant generation and add pitch (F0) tracking alongside F1/F2/F3 — see [Formant Tracking](#formant-tracking).
-8. Change playback so Play only plays the currently-visible section of the timeline (like Audacity), rather than the current selection/full-duration behavior — see [Playback](#playback).
-9. Audit for more light-mode contrast bugs. The invisible white-on-white Export "Cancel" button and the still-dark ruler bar (both fixed 2026-07) were found by manually clicking through in light mode, not a systematic pass — there are likely other spots with the same class of issue (a white-text button class combined with a transparent background, or a hardcoded dark literal in a `draw*` function that should join the [light-mode plot background exception](#theming-lightdark-mode)).
+1. Audit the codebase for dead code and clean it up — candidates already flagged elsewhere in this doc: the commented-out Split Edit Button UI/state (see [Split Edit Button (removed)](#split-edit-button-removed)), `formantWorker.js` (superseded by `dsp_server.py`), and the `audioFileName` state (set on every load but no longer displayed anywhere — see [File Picker](#file-picker-filepicker-component)).
+2. Clarify save behavior — see [Save to Disk](#save-to-disk-ctrlcmds). Does `Ctrl/Cmd+S` silently overwrite the existing TextGrid on disk? If so, show the user a confirmation popup before/when that overwrite happens.
+3. Fix issues in formant generation and add pitch (F0) tracking alongside F1/F2/F3 — see [Formant Tracking](#formant-tracking).
+4. Change playback so Play only plays the currently-visible section of the timeline (like Audacity), rather than the current selection/full-duration behavior — see [Playback](#playback).
+5. Audit for more light-mode contrast bugs. The invisible white-on-white Export "Cancel" button and the still-dark ruler bar (both fixed 2026-07) were found by manually clicking through in light mode, not a systematic pass — there are likely other spots with the same class of issue (a white-text button class combined with a transparent background, or a hardcoded dark literal in a `draw*` function that should join the [light-mode plot background exception](#theming-lightdark-mode)).
+6. If queueing delay from the [persistent DSP worker](#persistent-worker-latency)'s single-process FIFO design shows up in practice (a slow formants request delaying queued spec requests), consider a small worker pool instead of one process — not implemented so far since normal usage (formants requests are manual/occasional) hasn't needed it.
