@@ -1387,10 +1387,11 @@ export default function App() {
     playheadRef.current = t;
     updateTimeDisplay();
     const { t0, t1 } = viewRef.current;
-    const span = t1 - t0, pad = span * 0.12;
-    if (playheadRef.current > t1 - pad) {
-      const newT0 = Math.min(DUR - span, playheadRef.current - pad);
-      viewRef.current = { t0: newT0, t1: newT0 + span };
+    const span = t1 - t0;
+    const half = span / 2;
+    const desiredT0 = Math.max(0, Math.min(DUR - span, playheadRef.current - half));
+    if (playheadRef.current > t0 + half && Math.abs(desiredT0 - t0) > 1e-6) {
+      viewRef.current = { t0: desiredT0, t1: desiredT0 + span };
       redraw();
     } else {
       drawOverlay();
