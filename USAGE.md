@@ -119,8 +119,8 @@ Click **↓ Export** to download the annotations as a file. Two format options:
 | `Ctrl/Cmd+S` | Save TextGrid to disk (dev only) |
 | `Ctrl/Cmd+Z` | Undo |
 | `Ctrl/Cmd+Y` | Redo |
-| `Ctrl/Cmd+C` | Copy selected tile's label (edit mode, requires a selection) |
-| `Ctrl/Cmd+V` | Paste copied label onto all selected tiles (edit mode, requires a selection) |
+| `Ctrl/Cmd+C` | Copy selected tile(s), including a group across tiers (edit mode, requires a selection) |
+| `Ctrl/Cmd+V` | Paste copied tile(s) as new tile(s) anchored at the playhead (edit mode) |
 | `⌫` / `Delete` | Delete selected tile(s) (edit mode) |
 | `Shift+click` | Range-select tiles from the last-selected tile to the clicked tile (edit mode) |
 | `Ctrl/Cmd+click` (or drag) | Range-select tiles — same as `Shift+click` (edit mode) |

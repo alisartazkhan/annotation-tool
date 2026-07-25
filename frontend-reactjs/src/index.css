@@ -256,7 +256,6 @@ html, body {
 /* ── Toolbar buttons: normalize every button/control in the main toolbar to one height ── */
 .toolbar .btn,
 .toolbar .load-btn,
-.toolbar .btn-edit-split,
 .toolbar .colormap-select {
   height: var(--toolbar-btn-h);
 }
@@ -277,14 +276,6 @@ html, body {
    resizing the window and watching where wrapping actually kicks in. */
 @media (max-width: 1100px) {
   .toolbar .btn-label { display: none; }
-}
-.toolbar .btn-edit-split__main {
-  display: flex; align-items: center; justify-content: center;
-  padding: 0 13px;
-}
-.toolbar .btn-edit-split__badge {
-  display: flex; align-items: center; justify-content: center;
-  padding: 0 8px;
 }
 .toolbar .colormap-select {
   padding: 0 8px;
@@ -485,56 +476,6 @@ html, body {
   transition: opacity 140ms;
 }
 .drop-overlay.active { opacity: 1; pointer-events: all; }
-
-/* ── Split edit button (main + hotkey badge) ── */
-.btn-edit-split {
-  display: flex; align-items: stretch;
-  border: 1px solid var(--border-ui); border-radius: 6px;
-  background: var(--bg-item); overflow: hidden;
-  transition: border-color 100ms;
-}
-.btn-edit-split.active {
-  background: var(--text); border-color: var(--text);
-}
-.btn-edit-split.active .btn-edit-split__divider {
-  background: var(--bg);
-}
-.btn-edit-split__main {
-  padding: 8px 13px; border: none; border-radius: 0;
-  background: transparent; color: var(--text-dim);
-  font-size: 12px; font-family: inherit; cursor: pointer;
-  transition: background 100ms, color 100ms;
-}
-.btn-edit-split__main:hover { background: var(--border-ui); color: var(--text); }
-.btn-edit-split.active .btn-edit-split__main {
-  color: var(--bg);
-}
-.btn-edit-split.active .btn-edit-split__main:hover {
-  background: rgba(0,0,0,0.12); color: var(--bg);
-}
-.btn-edit-split__divider {
-  width: 1px; background: var(--border-ui); flex-shrink: 0; align-self: stretch;
-  transition: background 100ms;
-}
-.btn-edit-split__badge {
-  padding: 5px 8px; border: none; border-radius: 0;
-  background: transparent; color: var(--text-dark);
-  font-size: 11px; font-family: var(--mono); cursor: pointer;
-  transition: background 100ms, color 100ms; min-width: 28px; text-align: center;
-}
-.btn-edit-split__badge:hover { background: var(--border-ui); color: var(--accent); }
-.btn-edit-split.active .btn-edit-split__badge {
-  color: rgba(0,0,0,0.45);
-}
-.btn-edit-split.active .btn-edit-split__badge:hover {
-  background: rgba(0,0,0,0.12); color: var(--bg);
-}
-.btn-edit-split__capture {
-  width: 42px; padding: 4px 6px; border: none; border-radius: 0;
-  background: #1a1a2e; color: var(--accent);
-  font-size: 11px; font-family: var(--mono);
-  text-align: center; outline: none; cursor: default;
-}
 
 /* ── Zoom slider ── */
 .zoom-row {

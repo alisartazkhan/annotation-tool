@@ -38,7 +38,6 @@ src/
   parseTextGrid.js    Praat TextGrid parser
   dsp.js              DSP helpers used on main thread (mel spec, RMS, LPC formants, colormaps)
   specWorker.js       Web Worker: base mel spectrogram on load → RGBA pixels (JS FFT)
-  formantWorker.js    UNUSED — superseded by dsp_server.py; kept as dead code
   mfaWorker.js        Web Worker: encodes WAV + POSTs to MFA server + returns phones/words
   canvasUtils.js      setupCanvas() (HiDPI), fmtTime()
   shortcuts.js        ShortcutsPopover content (welcome text + shortcut tables) — edit here, not in App.jsx
@@ -325,7 +324,7 @@ so it should persist across loads within a session.
 
 The toolbar previously had a unified Edit button split into two clickable zones — a left half that toggled edit mode and a right half that showed the current hotkey and let you rebind it to any key. It was removed (2026-07) to reduce toolbar crowding: edit mode is default-on and rarely needs toggling, and the rebind feature added a second control for a rarely-changed setting.
 
-The JSX (`.btn-edit-split` / `__main` / `__divider` / `__badge` / `__capture`) is commented out in place in `App.jsx` (search "Split edit button") rather than deleted, along with the `editShortcut`/`editingShortcut` state and `editShortcutRef`, so the feature can be restored by uncommenting. The corresponding CSS rules in `index.css` were left in place (unused) for the same reason.
+The JSX (`.btn-edit-split` / `__main` / `__divider` / `__badge` / `__capture`), the `editShortcut`/`editingShortcut` state, `editShortcutRef`, and the corresponding CSS rules in `index.css` were fully deleted (2026-07-25) as part of a dead-code audit — check git history (search "Split edit button") if this UI ever needs to be restored.
 
 The hotkey is now **hardcoded to `1`** in the keydown handler (no longer configurable): it matches against `e.code`, `e.key`, and the numpad alias (`Numpad1`), so numpad `1` also fires edit mode regardless of NumLock state.
 
@@ -460,6 +459,16 @@ Edge dragging is always single-tile only.
 | Key | Action |
 |---|---|
 | `⌫` / `Delete` | Delete all selected tiles across all tiers (undoable) |
+
+### Copy / Paste
+
+`Ctrl/Cmd+C` copies the full selection (single tile or a group, potentially spanning multiple tiers) into `tileClipboardRef` — each entry stores `{ tierId, offset, dur, text }`, where `offset`/`dur` are relative to the **earliest** copied tile's `t0` (so a group's internal spacing survives the round-trip, not just each tile's own duration).
+
+`Ctrl/Cmd+V` creates brand-new tile(s) — fresh `id`s via `nextId()` — anchored so the earliest tile's `t0` lands at the current playhead (`playheadRef.current`); every other pasted tile is offset from that same anchor. New tiles are appended into their original tiers via `commitTierItems` + `assignRows`, and the resulting selection is set to just the newly pasted tile(s), replacing whatever was selected before paste. Pasting repeatedly (without re-copying) stamps another copy at wherever the playhead is at each `Ctrl/Cmd+V`.
+
+**This replaced an earlier, narrower implementation** (removed 2026-07-25) that only stored one tile's label text and applied it onto every currently-selected tile's text on paste — it never created new tiles or touched timing, which didn't match "copy/paste a tile" as most users would expect.
+
+Pasted `t0`/`t1` are clamped to `[0, DUR]` — pasting near the end of the file truncates rather than overflowing past the last sample.
 
 ---
 
@@ -788,7 +797,7 @@ The "Generate Formants" card has an inline pill toggle ("Overlay on/off") that s
 
 ### Legacy worker
 
-`formantWorker.js` (JS LPC, order 12) is no longer called. It is kept in the repo but is dead code.
+`formantWorker.js` (JS LPC, order 12) was superseded by `dsp_server.py` and deleted (2026-07-25 dead-code audit) — check git history if it's ever needed again.
 
 ---
 
@@ -894,8 +903,8 @@ Note: the blue tile color and the green dashboard color are independent — `dra
 | Ctrl/Cmd+S | Save TextGrid to `public/` (dev only) |
 | Ctrl/Cmd+Z | Undo |
 | Ctrl/Cmd+Y | Redo |
-| Ctrl/Cmd+C | Copy selected tile's label (edit mode, requires a selection) |
-| Ctrl/Cmd+V | Paste copied label onto all selected tiles (edit mode, requires a selection) |
+| Ctrl/Cmd+C | Copy selected tile(s) — single or group, across tiers (edit mode, requires a selection) |
+| Ctrl/Cmd+V | Paste copied tile(s) as new tile(s), anchored at the playhead (edit mode) |
 | ⌫ / Delete | Delete selected tile(s) (edit mode, requires a selection) |
 | Shift+click | Range-select tiles from the last-selected tile to the clicked tile (edit mode) |
 | Ctrl/Cmd+click (or drag) | Same range-select as Shift+click (edit mode); the toggle-selection variant is dead/commented-out code in the tier mousedown handler |
@@ -935,7 +944,6 @@ Notable component classes:
 
 | Class | Purpose |
 |---|---|
-| `.btn-edit-split` / `__main` / `__badge` / `__capture` | Split edit+hotkey button — **unused**, kept for possible restore (see [Split Edit Button (removed)](#split-edit-button-removed)) |
 | `.save-indicator` | Inline save status in logo bar |
 | `.save-indicator--unsaved` | Amber — unsaved changes present |
 | `.save-indicator--saving/saved/error` | Blue/green/red state variants |
@@ -953,7 +961,7 @@ Notable component classes:
 
 ### Toolbar button height normalization
 
-Every button/control inside `.toolbar` (`.btn`, `.load-btn`, `.btn-edit-split`, `.colormap-select`) is pinned to one shared height via the `--toolbar-btn-h` CSS variable (currently `28px`, defined in `:root`), plus `display: flex; align-items: center; justify-content: center;` so label text stays vertically centered regardless of font-size differences between button variants. `white-space: nowrap` on `.toolbar .btn`/`.load-btn` stops icon+label text (e.g. `◎ Scores`, `▶ Play`) from wrapping onto two lines when the toolbar is tight on space.
+Every button/control inside `.toolbar` (`.btn`, `.load-btn`, `.colormap-select`) is pinned to one shared height via the `--toolbar-btn-h` CSS variable (currently `28px`, defined in `:root`), plus `display: flex; align-items: center; justify-content: center;` so label text stays vertically centered regardless of font-size differences between button variants. `white-space: nowrap` on `.toolbar .btn`/`.load-btn` stops icon+label text (e.g. `◎ Scores`, `▶ Play`) from wrapping onto two lines when the toolbar is tight on space.
 
 These rules are scoped with a `.toolbar` ancestor selector (`.toolbar .btn`, not bare `.btn`) so they don't affect the same class names reused in popovers/modals (Export popover, Tier-name popover, MFA word-picker modal), which are deliberately more compact. If you add a new toolbar control, give it one of the classes above (or add it to the scoped rule) rather than hand-tuning its padding — that's what caused the original height mismatch (no button class set an explicit `height`; each one's rendered height was just whatever `padding + font-size + border` happened to add up to).
 
@@ -1019,7 +1027,7 @@ This must stay in `index.html`, not move into a React effect — React can't run
 
 **Token conventions**: generic surface/text tokens (`--bg-surface`, `--border-surface`, `--bg-tooltip`, `--text-soft`, `--accent-rgb` for `rgba(var(--accent-rgb), alpha)` blends) extend the pre-existing `:root` convention. Semantic brand-color families — `--mfa-*` (green), `--export-*` (green), `--tier-*` (blue), `--warn-*`/`--error-*`/`--save-*` (status colors) — get their **own** light-mode-adjusted values rather than being swept into the generic tokens, since they need to keep their hue meaning in both themes. Literal `#fff`/`#000` is left alone (not tokenized) wherever text is contrast-matched to a *fixed* accent color rather than to the page background (e.g. white text on the always-blue Play button) — correct in both themes by construction.
 
-**Frozen-dark boundary — do not add theme awareness beyond the table above**: `drawPlayheadLine`, `drawSelectionRect`, `drawSpec`, `drawFreqAxis`, `drawOverlay`, and `drawSnapGuide` remain entirely theme-unaware, as do `src/dsp.js`, `src/specWorker.js`, `src/formantWorker.js` (dead code, but still off-limits), `scoreColor()` and every call site (tile fills, `ConfidenceDashboard`'s stat values/histogram/lowest-confidence rows), and `ConfidenceDashboard`'s hardcoded gradient legend (mirrors the frozen canvas confidence scale). `drawWave`/`drawTier`/`drawMinimap`/`drawScrollbar`/`drawRuler` themselves are *not* fully off-limits anymore — only their background fill (plus `drawTier`'s tile text and `drawMinimap`'s viewport tint) is in scope, per the exception above; every other color decision inside those five functions is still frozen. The colormap→label-color table inside `drawSpec` (jet=black/inferno=white/viridis=white/greys=black) is about legibility against each *spectrogram colormap*, not the app theme — leave it alone too.
+**Frozen-dark boundary — do not add theme awareness beyond the table above**: `drawPlayheadLine`, `drawSelectionRect`, `drawSpec`, `drawFreqAxis`, `drawOverlay`, and `drawSnapGuide` remain entirely theme-unaware, as do `src/dsp.js`, `src/specWorker.js`, `scoreColor()` and every call site (tile fills, `ConfidenceDashboard`'s stat values/histogram/lowest-confidence rows), and `ConfidenceDashboard`'s hardcoded gradient legend (mirrors the frozen canvas confidence scale). `drawWave`/`drawTier`/`drawMinimap`/`drawScrollbar`/`drawRuler` themselves are *not* fully off-limits anymore — only their background fill (plus `drawTier`'s tile text and `drawMinimap`'s viewport tint) is in scope, per the exception above; every other color decision inside those five functions is still frozen. The colormap→label-color table inside `drawSpec` (jet=black/inferno=white/viridis=white/greys=black) is about legibility against each *spectrogram colormap*, not the app theme — leave it alone too.
 
 **In scope despite sitting next to canvases**: `.minimap`/`.scrollbar-strip`/`*-gutter` div backgrounds (these are DOM chrome behind/beside the canvas, not `fillStyle` calls) and the `.formant-card`/`.spec-overlay-btns`/`.calc-spec-btn` floating HUD (DOM elements layered over the spectrogram via `backdrop-filter`, not canvas draw calls) — in light mode these render as a light, translucent card floating over the still-dark spectrogram underneath, which is intentional.
 
@@ -1075,7 +1083,7 @@ This must stay in `index.html`, not move into a React effect — React can't run
 
 - **Edit mode is on by default.** Both `useState(true)` and `useRef(true)` must match — if you change the default, update both.
 
-- **The edit-mode hotkey is hardcoded to `1`**, not read from state/ref. The rebindable-shortcut UI and its `editShortcut`/`editingShortcut`/`editShortcutRef` are commented out (see [Split Edit Button (removed)](#split-edit-button-removed)); don't reintroduce a reference to them elsewhere without restoring that block first.
+- **The edit-mode hotkey is hardcoded to `1`**, not read from state/ref. The rebindable-shortcut UI and its `editShortcut`/`editingShortcut`/`editShortcutRef` were deleted (see [Split Edit Button (removed)](#split-edit-button-removed)); check git history before reintroducing a reference to them elsewhere.
 
 - **Toolbar button classes (`.toolbar .btn`, `.toolbar .load-btn`, etc.) set an explicit `height: var(--toolbar-btn-h)`.** Don't override `padding`'s vertical component or set a conflicting `height` on a specific toolbar button — it will fall out of alignment with its siblings. Adjust `--toolbar-btn-h` in `:root` if you need to resize all of them at once.
 
@@ -1133,8 +1141,8 @@ When `/api/public-files` returns more than one `.wav` or `.TextGrid`, the app re
 
 - Two `<select>` dropdowns — one for wav, one for TextGrid (includes a "— none —" option).
 - On confirm calls `onSelect(wavName, tgName | null)` which calls `loadPublicPair`.
-- `loadPublicPair(wavName, tgName)` — `useCallback` that fetches both files from `public/`, calls `loadTextGrid` + `loadAudio`, and sets `publicWavFileRef` / `audioFileName`. This is also used by the single-file auto-load path.
-  - `audioFileName` is no longer displayed anywhere (it used to show next to the app name in the toolbar logo, e.g. "GSA  audio" for a file named `audio.wav`) — that span was removed to declutter the toolbar. The state is still set on every load and may be worth deleting outright if nothing picks it up again.
+- `loadPublicPair(wavName, tgName)` — `useCallback` that fetches both files from `public/`, calls `loadTextGrid` + `loadAudio`, and sets `publicWavFileRef`. This is also used by the single-file auto-load path.
+  - The `audioFileName` state (it used to show next to the app name in the toolbar logo, e.g. "GSA  audio" for a file named `audio.wav`) was deleted (2026-07-25 dead-code audit) — it had been set on every load but was no longer displayed anywhere since the toolbar span was removed.
 
 ---
 
@@ -1153,9 +1161,9 @@ When `/api/public-files` returns more than one `.wav` or `.TextGrid`, the app re
 
 Follow-ups to pick up next session — flag any of these and we can plan/implement from here:
 
-1. Audit the codebase for dead code and clean it up — candidates already flagged elsewhere in this doc: the commented-out Split Edit Button UI/state (see [Split Edit Button (removed)](#split-edit-button-removed)), `formantWorker.js` (superseded by `dsp_server.py`), and the `audioFileName` state (set on every load but no longer displayed anywhere — see [File Picker](#file-picker-filepicker-component)).
-2. Clarify save behavior — see [Save to Disk](#save-to-disk-ctrlcmds). Does `Ctrl/Cmd+S` silently overwrite the existing TextGrid on disk? If so, show the user a confirmation popup before/when that overwrite happens.
-3. Fix issues in formant generation and add pitch (F0) tracking alongside F1/F2/F3 — see [Formant Tracking](#formant-tracking).
-4. Change playback so Play only plays the currently-visible section of the timeline (like Audacity), rather than the current selection/full-duration behavior — see [Playback](#playback).
-5. Audit for more light-mode contrast bugs. The invisible white-on-white Export "Cancel" button and the still-dark ruler bar (both fixed 2026-07) were found by manually clicking through in light mode, not a systematic pass — there are likely other spots with the same class of issue (a white-text button class combined with a transparent background, or a hardcoded dark literal in a `draw*` function that should join the [light-mode plot background exception](#theming-lightdark-mode)).
-6. If queueing delay from the [persistent DSP worker](#persistent-worker-latency)'s single-process FIFO design shows up in practice (a slow formants request delaying queued spec requests), consider a small worker pool instead of one process — not implemented so far since normal usage (formants requests are manual/occasional) hasn't needed it.
+1. Clarify save behavior — see [Save to Disk](#save-to-disk-ctrlcmds). Does `Ctrl/Cmd+S` silently overwrite the existing TextGrid on disk? If so, show the user a confirmation popup before/when that overwrite happens.
+2. Fix issues in formant generation and add pitch (F0) tracking alongside F1/F2/F3 — see [Formant Tracking](#formant-tracking).
+3. Change playback so Play only plays the currently-visible section of the timeline (like Audacity), rather than the current selection/full-duration behavior — see [Playback](#playback).
+4. Audit for more light-mode contrast bugs. The invisible white-on-white Export "Cancel" button and the still-dark ruler bar (both fixed 2026-07) were found by manually clicking through in light mode, not a systematic pass — there are likely other spots with the same class of issue (a white-text button class combined with a transparent background, or a hardcoded dark literal in a `draw*` function that should join the [light-mode plot background exception](#theming-lightdark-mode)).
+5. If queueing delay from the [persistent DSP worker](#persistent-worker-latency)'s single-process FIFO design shows up in practice (a slow formants request delaying queued spec requests), consider a small worker pool instead of one process — not implemented so far since normal usage (formants requests are manual/occasional) hasn't needed it.
+6. **Bug**: Selecting tiles across tiers doesn't work — reported by the user as broken. Needs investigation into `addTierEditInteraction`'s mousedown/shift-click/ctrl-click handling and `selectedTilesRef`/`syncSelectionState` (see [Tile Selection & Multi-Select](#tile-selection--multi-select)) to find where cross-tier selection breaks. Note: the mousedown handler's active `multiKey` (Ctrl/Cmd+click) branch implements a same-tier-only range-select (it resets `selectionAnchorRef` whenever the clicked tile's `tierId` differs from the anchor's), and the only code that ever supported toggling arbitrary tiles into a selection regardless of tier is commented out just above it (search "toggle tile in/out of multi-selection") — that's the most likely root cause to start from.

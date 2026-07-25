@@ -646,7 +646,6 @@ export default function App() {
   // ── React state (drives toolbar UI only) ──────────────────────────────
   const [words, setWords]               = useState([]);
   const [phones, setPhones]             = useState([]);
-  const [audioFileName, setAudioFileName] = useState('');
   const [duration, setDuration]         = useState(70);
   const [playing, setPlaying]           = useState(false);
   const [loopMode, setLoopMode]         = useState(false);
@@ -660,10 +659,6 @@ export default function App() {
   const [formantComputing, setFormantComputing] = useState(false);
   const [editMode, setEditMode]         = useState(true);
   const [labelEditor, setLabelEditor]   = useState(null); // { id, tierId, tierType, text, x, y, boxW }
-  // Rebindable edit-mode shortcut — UI removed (hotkey is now hardcoded to '1', see keydown handler
-  // below); state kept commented out here so the split-button UI can be restored later if needed.
-  // const [editShortcut, setEditShortcut] = useState('1');
-  // const [editingShortcut, setEditingShortcut] = useState(false);
   const [showDashboard, setShowDashboard] = useState(false);
   const [showShortcutsPopover, setShowShortcutsPopover] = useState(false);
   // Chrome-only theme (toolbar/panels/popovers). drawWave/drawTier also read themeRef for their
@@ -695,7 +690,6 @@ export default function App() {
   const mfaQueueRef = useRef([]);
   const mfaProcessingRef = useRef(false);
   const playbackRateRef = useRef(1);
-  // const editShortcutRef = useRef('1'); // see commented-out editShortcut state above
 
   const panelSplitRef  = useRef(0.45);
   const wavePanelRef   = useRef(null);
@@ -744,7 +738,6 @@ export default function App() {
   // adjust yZoomRef or fontScaleRef. No state twin: nothing displays this value.
   const focusedPanelRef  = useRef('waveform');
   const specWorkerRef    = useRef(null);
-  const formantWorkerRef = useRef(null);
   const formantViewRef   = useRef(null);
   const wordsRef         = useRef([]);
   const phonesRef        = useRef([]);
@@ -766,7 +759,7 @@ export default function App() {
   const hoverEdgeRef     = useRef(null); // { id, tierId, side: 'left'|'right' } for cursor feedback
   const selectedTilesRef = useRef(new Map()); // id → { id, tierId } — multi-selected tiles in edit mode
   const selectionAnchorRef = useRef(null);
-  const labelClipboardRef = useRef(null);
+  const tileClipboardRef = useRef(null); // [{ tierId, offset, dur, text }] | null — offset/dur relative to the earliest copied tile's t0
   const snapGuideRef     = useRef(null); // { ts: number[] } | null — live edge position(s) of the active drag (1 for edge drag, 2 for body/group drag)
 
   // ── Canvas element refs ───────────────────────────────────────────────
@@ -1881,7 +1874,6 @@ export default function App() {
       if (!res.ok) throw new Error(res.statusText);
       await loadAudio(new File([await res.blob()], wavName, { type: 'audio/wav' }));
       publicWavFileRef.current = wavName;
-      setAudioFileName(wavName.replace(/\.[^.]+$/, ''));
       setSetupError(null);
       // Kick off the enhanced spectrogram immediately for the starting view ± buffer,
       // plus the overview chunk covering it — publicWavFileRef wasn't set yet during
@@ -1979,9 +1971,7 @@ export default function App() {
       if (e.code === 'KeyL') { const n = !loopModeRef.current; loopModeRef.current = n; setLoopMode(n); }
       if (e.code === 'KeyF') { viewRef.current = { t0: 0, t1: DUR }; redraw(); }
       if (e.code === 'KeyR' && !e.ctrlKey && !e.metaKey) { e.preventDefault(); calcSpecForView(); }
-      // Edit mode hotkey — hardcoded to '1' now that the rebindable-shortcut UI is commented out
-      // (see the split-edit-button block in the toolbar JSX). To restore rebinding, swap this
-      // back to comparing e.code/e.key against editShortcutRef.current.
+      // Edit mode hotkey — hardcoded to '1'.
       if (e.code === 'Digit1' || e.key === '1' || (e.code === 'Numpad1' && e.key === '1')) {
         e.preventDefault();
         const n = !editModeRef.current; editModeRef.current = n; setEditMode(n);
@@ -1998,35 +1988,54 @@ export default function App() {
         popRedo();
         redraw();
       }
-      // Copy the selected tile's label into the in-app clipboard
+      // Copy the selected tile(s) — single or group, across tiers — into the in-app clipboard.
+      // Stores each tile's own text/duration plus its offset from the earliest copied tile's
+      // t0, so a group pastes back with its internal spacing intact.
       if ((e.ctrlKey || e.metaKey) && e.code === 'KeyC') {
         if (editModeRef.current && selectedTilesRef.current.size > 0) {
-          const first = selectedTilesRef.current.values().next().value;
-          const items = first.tierId === 'words'  ? wordsRef.current
-                      : first.tierId === 'phones' ? phonesRef.current
-                      : (customTiersRef.current.find(t => t.id === first.tierId)?.items ?? []);
-          const it = items.find(x => x.id === first.id);
-          if (it) labelClipboardRef.current = it.text;
+          const tiers = getAllTiers();
+          const copied = [];
+          for (const [id, entry] of selectedTilesRef.current) {
+            const tier = tiers.find(t => t.id === entry.tierId);
+            const it = tier && tier.items.find(x => x.id === id);
+            if (it) copied.push({ tierId: entry.tierId, t0: it.t0, t1: it.t1, text: it.text });
+          }
+          if (copied.length) {
+            const anchorT0 = Math.min(...copied.map(c => c.t0));
+            tileClipboardRef.current = copied.map(c => ({
+              tierId: c.tierId, offset: c.t0 - anchorT0, dur: c.t1 - c.t0, text: c.text,
+            }));
+          }
         }
         return;
       }
-      // Paste the clipboard label onto every selected tile
+      // Paste the clipboard tile(s) as brand-new tile(s) in their original tiers, anchored so
+      // the earliest one's t0 lands at the current playhead — relative spacing within a group
+      // is preserved. Replaces the current selection with the newly pasted tile(s).
       if ((e.ctrlKey || e.metaKey) && e.code === 'KeyV') {
-        if (editModeRef.current && selectedTilesRef.current.size > 0 && labelClipboardRef.current != null) {
+        if (editModeRef.current && tileClipboardRef.current && tileClipboardRef.current.length) {
           e.preventDefault();
           pushUndo();
+          const DUR = durationRef.current;
+          const target = playheadRef.current;
           const byTier = new Map();
-          for (const [id, entry] of selectedTilesRef.current) {
-            if (!byTier.has(entry.tierId)) byTier.set(entry.tierId, new Set());
-            byTier.get(entry.tierId).add(id);
+          const newSelection = [];
+          for (const c of tileClipboardRef.current) {
+            const t0 = Math.max(0, Math.min(DUR, target + c.offset));
+            const t1 = Math.max(t0, Math.min(DUR, t0 + c.dur));
+            const newItem = { id: nextId(), t0, t1, text: c.text, row: 0 };
+            if (!byTier.has(c.tierId)) byTier.set(c.tierId, []);
+            byTier.get(c.tierId).push(newItem);
+            newSelection.push({ id: newItem.id, tierId: c.tierId });
           }
-          for (const [tid, idSet] of byTier) {
-            const items = tid === 'words'  ? wordsRef.current
-                        : tid === 'phones' ? phonesRef.current
-                        : (customTiersRef.current.find(t => t.id === tid)?.items ?? []);
-            commitTierItems(tid, items.map(it =>
-              idSet.has(it.id) ? { ...it, text: labelClipboardRef.current } : it));
+          const tiers = getAllTiers();
+          for (const [tid, newItems] of byTier) {
+            const tier = tiers.find(t => t.id === tid);
+            commitTierItems(tid, assignRows([...(tier ? tier.items : []), ...newItems]));
           }
+          selectedTilesRef.current.clear();
+          for (const { id, tierId } of newSelection) selectedTilesRef.current.set(id, { id, tierId });
+          syncSelectionState();
           redraw();
         }
         return;
@@ -2077,7 +2086,7 @@ export default function App() {
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [stopPlay, startPlay, redraw, popUndo, pushUndo, commitTierItems, clearSelection, saveTextGrid, adjustYZoom, adjustFontScale, calcSpecForView]);
+  }, [stopPlay, startPlay, redraw, popUndo, pushUndo, commitTierItems, clearSelection, saveTextGrid, adjustYZoom, adjustFontScale, calcSpecForView, getAllTiers, syncSelectionState]);
 
   // ── Zoom ──────────────────────────────────────────────────────────────
 
@@ -3352,53 +3361,6 @@ export default function App() {
           <span className="zoom-label">ZOOM</span>
           <input type="range" min="0" max="100" value={zoomValue} onChange={e => handleZoom(+e.target.value)} title="Zoom level" />
         </div>
-        {/*
-          ── Split edit button: left half toggles edit, right half rebinds shortcut ──
-          Removed from the toolbar (2026-07) to reduce crowding — edit mode is now default-on
-          and toggled only via the hardcoded '1' hotkey (see keydown handler). To restore this
-          UI: uncomment this block plus the editShortcut/editingShortcut state and
-          editShortcutRef declarations above, and revert the keydown handler's edit-mode check
-          back to comparing against editShortcutRef.current.
-
-        <div className={`btn-edit-split${editMode ? ' active' : ''}`}>
-          <button
-            className="btn-edit-split__main"
-            onClick={() => { const n = !editModeRef.current; editModeRef.current = n; setEditMode(n); if (!n) clearSelection(); redraw(); }}
-            title={`Toggle edit mode (${editShortcut})`}
-          >
-            {editMode ? '✎ Edit mode' : '✎ View mode'}
-          </button>
-          <div className="btn-edit-split__divider" />
-          {editingShortcut ? (
-            <input
-              autoFocus
-              className="btn-edit-split__capture"
-              placeholder="key…"
-              readOnly
-              onKeyDown={(e) => {
-                e.preventDefault();
-                if (['Control','Alt','Shift','Meta'].includes(e.key)) return;
-                const label = e.code.startsWith('Key') ? e.key.toUpperCase()
-                  : e.code.startsWith('Digit') ? e.key
-                  : e.key;
-                editShortcutRef.current = e.code.startsWith('Key') ? e.code : e.key;
-                setEditShortcut(label);
-                setEditingShortcut(false);
-              }}
-              onBlur={() => setEditingShortcut(false)}
-              title="Press any key to set as the edit mode shortcut"
-            />
-          ) : (
-            <button
-              className="btn-edit-split__badge"
-              onClick={() => setEditingShortcut(true)}
-              title="Click to rebind edit mode shortcut"
-            >
-              {editShortcut}
-            </button>
-          )}
-        </div>
-        */}
         <button
           className={`btn${showDashboard ? ' active' : ''}`}
           onClick={() => setShowDashboard(v => !v)}
