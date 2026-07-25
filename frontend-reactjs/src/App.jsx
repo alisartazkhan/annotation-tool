@@ -21,7 +21,7 @@ const getTierType = (tierId) =>
 // elsewhere (drawWave's full-file gain; drawTier's row-height auto-scaling) — see the
 // panel-gutter +/- buttons (waveform) and SHOW-bar +/- buttons (tile text).
 const YZOOM_MIN_MULT = 0.25;
-const YZOOM_MAX_MULT = 4;
+const YZOOM_MAX_MULT = 12;
 const YZOOM_STEP = 1.2;
 const FONT_SCALE_MIN = 0.7;
 const FONT_SCALE_MAX = 2;
@@ -1346,9 +1346,9 @@ export default function App() {
     for (const cv of canvases) {
       const { ctx, w, h } = setupCanvas(cv);
       ctx.save();
-      ctx.strokeStyle = 'rgba(255, 220, 80, 0.85)';
-      ctx.lineWidth = 1;
-      ctx.setLineDash([4, 3]);
+      ctx.strokeStyle = 'rgba(255, 30, 30, 0.9)';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([6, 4]);
       for (const t of sg.ts) {
         const x = tX(t, w);
         ctx.beginPath(); ctx.moveTo(x + 0.5, 0); ctx.lineTo(x + 0.5, h);
@@ -1978,7 +1978,7 @@ export default function App() {
       if ((e.ctrlKey || e.metaKey) && e.code === 'KeyS') { e.preventDefault(); saveTextGrid(); return; }
       if (e.code === 'KeyL') { const n = !loopModeRef.current; loopModeRef.current = n; setLoopMode(n); }
       if (e.code === 'KeyF') { viewRef.current = { t0: 0, t1: DUR }; redraw(); }
-      if (e.code === 'Home') { viewRef.current = { t0: 0, t1: Math.min(DUR, 20) }; redraw(); }
+      if (e.code === 'KeyR' && !e.ctrlKey && !e.metaKey) { e.preventDefault(); calcSpecForView(); }
       // Edit mode hotkey — hardcoded to '1' now that the rebindable-shortcut UI is commented out
       // (see the split-edit-button block in the toolbar JSX). To restore rebinding, swap this
       // back to comparing e.code/e.key against editShortcutRef.current.
@@ -2077,7 +2077,7 @@ export default function App() {
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [stopPlay, startPlay, redraw, popUndo, pushUndo, commitTierItems, clearSelection, saveTextGrid, adjustYZoom, adjustFontScale]);
+  }, [stopPlay, startPlay, redraw, popUndo, pushUndo, commitTierItems, clearSelection, saveTextGrid, adjustYZoom, adjustFontScale, calcSpecForView]);
 
   // ── Zoom ──────────────────────────────────────────────────────────────
 

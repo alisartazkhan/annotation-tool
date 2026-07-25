@@ -47,7 +47,7 @@ You can also load files at any time without restarting:
 | Zoom at cursor | `Ctrl/Cmd + scroll` |
 | Pan left/right | Horizontal scroll, Arrow keys (20% of view), or drag the minimap |
 | Fit full audio | `F` |
-| Reset to start | `Home` |
+| Force-refresh spectrogram | `R` or ↻ Force Refresh button |
 | Waveform amplitude zoom | `+`/`-` buttons next to the "WV" label, or `+`/`-` keys after clicking the waveform |
 | Tile text size | `+`/`-` buttons in the SHOW bar, or `+`/`-` keys after clicking a tile |
 | Seek | Click anywhere on the waveform, spectrogram, or ruler |
@@ -114,7 +114,7 @@ Click **↓ Export** to download the annotations as a file. Two format options:
 | `Space` | Play / Pause |
 | `L` | Toggle loop |
 | `F` | Fit full audio in view |
-| `Home` | Reset view to first 20 s |
+| `R` | Force-refresh the spectrogram for the current view |
 | `1` | Toggle edit mode (on by default) |
 | `Ctrl/Cmd+S` | Save TextGrid to disk (dev only) |
 | `Ctrl/Cmd+Z` | Undo |

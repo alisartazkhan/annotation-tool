@@ -233,7 +233,7 @@ peak-scanning loop were deleted entirely.
 `yZoomRef` (ref only, no state twin — nothing displays its numeric value) is a
 multiplier on top of the fixed baseline above, adjusted via `adjustYZoom(dir)`
 (`dir`: `+1`/`-1`), which multiplies or divides by `YZOOM_STEP` (1.2) and clamps to
-`[YZOOM_MIN_MULT, YZOOM_MAX_MULT]` (0.25–4). Two ways to trigger it:
+`[YZOOM_MIN_MULT, YZOOM_MAX_MULT]` (0.25–12). Two ways to trigger it:
 - **+/- buttons** in the waveform panel's gutter (the "WV" label column), above and
   below the label.
 - **+/- keys**, but only when the waveform was the last thing clicked — see
@@ -384,7 +384,7 @@ getCrossTierBoundaries(excludeId)   // flat array of all t0/t1 values from tiers
 
 ### Drag guide lines
 
-`snapGuideRef.current` holds `{ ts: number[] }` — the live time position(s) of the dragged tile/group's edge(s), updated on every `mousemove`, **regardless of whether a snap actually occurred**. `ts` has one entry for an edge drag (the dragged edge only) or two for a body/group drag (leading + trailing edge of the tile, or of the whole group treated as one virtual tile — never one line per tile in a multi-tile group). `drawSnapGuide()` draws a yellow dashed line for each entry in `ts`, across every canvas (wave, spec, words, phones, all custom tiers).
+`snapGuideRef.current` holds `{ ts: number[] }` — the live time position(s) of the dragged tile/group's edge(s), updated on every `mousemove`, **regardless of whether a snap actually occurred**. `ts` has one entry for an edge drag (the dragged edge only) or two for a body/group drag (leading + trailing edge of the tile, or of the whole group treated as one virtual tile — never one line per tile in a multi-tile group). `drawSnapGuide()` draws a red dashed line for each entry in `ts`, across every canvas (wave, spec, words, phones, all custom tiers).
 
 Each `onMove` tick calls `redraw()` (a full clear + repaint of every canvas from the live refs) **before** `drawSnapGuide()` — not just `drawTier` on the dragged tier's own canvas. This matters because `drawSnapGuide` paints directly onto the wave/spec/other-tier canvases with no separate overlay layer; if those canvases aren't fully repainted every tick, each new guide line accumulates on top of the last tick's instead of replacing it, leaving a trail of dashed lines behind as the cursor moves (this was a real bug — fixed by switching from a per-canvas `drawTier` call to a full `redraw()` before every `drawSnapGuide()`).
 
@@ -889,7 +889,7 @@ Note: the blue tile color and the green dashboard color are independent — `dra
 | Space | Play / pause |
 | L | Toggle loop |
 | F | Fit full duration |
-| Home | Reset to first 20s |
+| R | Force-refresh spectrogram for the current view (same as the ↻ Force Refresh button) |
 | `1` | Toggle edit mode (on by default; not currently rebindable — see [Split Edit Button (removed)](#split-edit-button-removed)) |
 | Ctrl/Cmd+S | Save TextGrid to `public/` (dev only) |
 | Ctrl/Cmd+Z | Undo |

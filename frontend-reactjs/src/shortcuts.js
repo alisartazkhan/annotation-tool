@@ -20,7 +20,7 @@ export const SHORTCUTS = [
   { keys: ['Space'], desc: 'Play / pause' },
   { keys: ['L'], desc: 'Toggle loop' },
   { keys: ['F'], desc: 'Fit full duration in view' },
-  { keys: ['Home'], desc: 'Reset view to the first 20 seconds' },
+  { keys: ['R'], desc: 'Force-refresh the spectrogram for the current view' },
   { keys: ['1'], desc: 'Toggle edit mode (on by default)' },
   { keys: ['←', '→'], desc: 'Pan the view by 20% of the current span' },
   { keys: ['+', '-'], desc: 'Zoom the waveform amplitude, or tile text size if a tier was last clicked' },
