@@ -1389,7 +1389,13 @@ export default function App() {
     const { t0, t1 } = viewRef.current;
     const span = t1 - t0;
     const half = span / 2;
-    const desiredT0 = Math.max(0, Math.min(DUR - span, playheadRef.current - half));
+    let desiredT0 = Math.max(0, Math.min(DUR - span, playheadRef.current - half));
+    const pxW = specCanvasRef.current?.clientWidth || 0;
+    if (pxW > 0) {
+      const tPerPx = span / pxW;
+      desiredT0 = Math.round(desiredT0 / tPerPx) * tPerPx;
+      desiredT0 = Math.max(0, Math.min(DUR - span, desiredT0));
+    }
     if (playheadRef.current > t0 + half && Math.abs(desiredT0 - t0) > 1e-6) {
       viewRef.current = { t0: desiredT0, t1: desiredT0 + span };
       redraw();
@@ -1401,7 +1407,6 @@ export default function App() {
 
   const startPlay = useCallback((from) => {
     if (!audioBufferRef.current) return;
-    console.log('[startPlay] from=', from.toFixed(3), 'sel=', selectionRef.current ? `${selectionRef.current.t0.toFixed(3)}-${selectionRef.current.t1.toFixed(3)}` : 'null');
     stopAudio();
     const ctx = getAudioCtx();
     const doStart = () => {
