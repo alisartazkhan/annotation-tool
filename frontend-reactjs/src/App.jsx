@@ -661,6 +661,8 @@ export default function App() {
   const selectedTilesRef = useRef(new Map()); // id → { id, tierId } — multi-selected tiles in edit mode
   const selectionAnchorRef = useRef(null);
   const labelClipboardRef = useRef(null);
+  const pasteTierRef = useRef(null);
+  const labelClipDurRef = useRef(null);
   const snapGuideRef     = useRef(null); // { t: number } | null — active snap target during edge drag
 
   // ── Canvas element refs ───────────────────────────────────────────────
@@ -1715,28 +1717,52 @@ export default function App() {
                       : first.tierId === 'phones' ? phonesRef.current
                       : (customTiersRef.current.find(t => t.id === first.tierId)?.items ?? []);
           const it = items.find(x => x.id === first.id);
-          if (it) labelClipboardRef.current = it.text;
+          if (it) { labelClipboardRef.current = it.text; labelClipDurRef.current = it.t1 - it.t0; }
         }
         return;
       }
-      // Paste the clipboard label onto every selected tile
       if ((e.ctrlKey || e.metaKey) && e.code === 'KeyV') {
-        if (editModeRef.current && selectedTilesRef.current.size > 0 && labelClipboardRef.current != null) {
-          e.preventDefault();
-          pushUndo();
-          const byTier = new Map();
-          for (const [id, entry] of selectedTilesRef.current) {
-            if (!byTier.has(entry.tierId)) byTier.set(entry.tierId, new Set());
-            byTier.get(entry.tierId).add(id);
+        if (editModeRef.current && labelClipboardRef.current != null) {
+          if (selectedTilesRef.current.size > 0) {
+            e.preventDefault();
+            pushUndo();
+            const byTier = new Map();
+            for (const [id, entry] of selectedTilesRef.current) {
+              if (!byTier.has(entry.tierId)) byTier.set(entry.tierId, new Set());
+              byTier.get(entry.tierId).add(id);
+            }
+            for (const [tid, idSet] of byTier) {
+              const items = tid === 'words'  ? wordsRef.current
+                          : tid === 'phones' ? phonesRef.current
+                          : (customTiersRef.current.find(t => t.id === tid)?.items ?? []);
+              commitTierItems(tid, items.map(it =>
+                idSet.has(it.id) ? { ...it, text: labelClipboardRef.current } : it));
+            }
+            redraw();
+          } else if (pasteTierRef.current) {
+            // Nothing selected: create a new tile at the click point / drag selection
+            e.preventDefault();
+            const tid = pasteTierRef.current;
+            const src = tid === 'words'  ? wordsRef.current
+                      : tid === 'phones' ? phonesRef.current
+                      : (customTiersRef.current.find(t => t.id === tid)?.items ?? []);
+            const DUR = durationRef.current;
+            const sel = selectionRef.current;
+            const span = (viewRef.current.t1 - viewRef.current.t0) * 0.05;
+            let t0, t1;
+            if (sel && sel.t1 - sel.t0 > 0.001) {
+              t0 = sel.t0; t1 = sel.t1;                       // dragged range overrides — use it as-is
+            } else {
+              // plain click: keep the copied tile's length, anchored at the click point
+              const c = sel ? sel.t0 : playheadRef.current;
+              const dur = labelClipDurRef.current || span * 2;
+              t0 = Math.max(0, c); t1 = Math.min(DUR, t0 + dur);
+            }
+            const newItem = { id: nextId(), t0, t1, text: labelClipboardRef.current, row: 0 };
+            pushUndo();
+            commitTierItems(tid, assignRows([...src, newItem]));
+            redraw();
           }
-          for (const [tid, idSet] of byTier) {
-            const items = tid === 'words'  ? wordsRef.current
-                        : tid === 'phones' ? phonesRef.current
-                        : (customTiersRef.current.find(t => t.id === tid)?.items ?? []);
-            commitTierItems(tid, items.map(it =>
-              idSet.has(it.id) ? { ...it, text: labelClipboardRef.current } : it));
-          }
-          redraw();
         }
         return;
       }
@@ -2003,6 +2029,7 @@ export default function App() {
 
     const onMouseDown = (e) => {
       if (e.button === 2) return;
+      pasteTierRef.current = tierId;
       if (!editModeRef.current) {
         const rect = canvas.getBoundingClientRect();
         const hit = hitTest(canvas, itemsRef.current, e.clientX, e.clientY);
