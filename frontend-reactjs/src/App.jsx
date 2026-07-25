@@ -704,7 +704,6 @@ export default function App() {
   const audioCtxRef      = useRef(null);
   const audioBufferRef   = useRef(null);
   const audioSourceRef   = useRef(null);
-  const playStartCtxRef  = useRef(0);  // ctx.currentTime snapshot (kept for reference)
   const playStartPerfRef = useRef(0);  // performance.now() snapshot — used for display timing
   const playStartAtRef   = useRef(0);
   const playEndAtRef     = useRef(0);
@@ -738,7 +737,6 @@ export default function App() {
   // adjust yZoomRef or fontScaleRef. No state twin: nothing displays this value.
   const focusedPanelRef  = useRef('waveform');
   const specWorkerRef    = useRef(null);
-  const formantViewRef   = useRef(null);
   const wordsRef         = useRef([]);
   const phonesRef        = useRef([]);
   const customTiersRef   = useRef([]);
@@ -826,28 +824,6 @@ export default function App() {
   }, []);
 
   // ── Undo ──────────────────────────────────────────────────────────────
-  // const pushUndo = useCallback(() => {
-  //   undoStackRef.current.push({
-  //     words:  wordsRef.current.map(it => ({ ...it })),
-  //     phones: phonesRef.current.map(it => ({ ...it })),
-  //     customTiers: customTiersRef.current.map(t => ({ ...t, items: t.items.map(i => ({ ...i })) })),
-  //   });
-  //   if (undoStackRef.current.length > 100) undoStackRef.current.shift();
-  //   setIsDirty(true);
-  // }, []);
-
-  // const popUndo = useCallback(() => {
-  //   const snap = undoStackRef.current.pop();
-  //   if (!snap) return;
-  //   wordsRef.current  = snap.words;
-  //   phonesRef.current = snap.phones;
-  //   customTiersRef.current = snap.customTiers || [];
-  //   setWords([...snap.words]);
-  //   setPhones([...snap.phones]);
-  //   setCustomTiers([...(snap.customTiers || [])]);
-  //   const current = serializeTextGrid(durationRef.current, snap.words, snap.phones, snap.customTiers || []);
-  //   setIsDirty(current !== savedTextGridRef.current);
-  // }, []);
   const pushUndo = useCallback(() => {
     undoStackRef.current.push({
       words:  wordsRef.current.map(it => ({ ...it })),
@@ -1130,8 +1106,6 @@ export default function App() {
     drawPlayheadLine(ctx, w, h);
   }, [drawSelectionRect, drawPlayheadLine]);
 
-  const drawFreqAxis = useCallback(() => {}, []);
-
   const drawRuler = useCallback(() => {
     const s = setupCanvas(rulerCanvasRef.current);
     if (!s) return;
@@ -1287,7 +1261,7 @@ export default function App() {
   }, []);
 
   const redraw = useCallback(() => {
-    drawWave(); drawSpec(); drawFreqAxis(); drawRuler();
+    drawWave(); drawSpec(); drawRuler();
     drawTier(wordsCanvasRef.current, wordsRef.current, true);
     drawTier(phonesCanvasRef.current, phonesRef.current, false);
     for (const tier of customTiersRef.current) {
@@ -1297,7 +1271,7 @@ export default function App() {
     drawMinimap();
     drawScrollbar();
     scheduleSpecPrefetchRef.current();
-  }, [drawWave, drawSpec, drawFreqAxis, drawRuler, drawTier, drawMinimap, drawScrollbar]);
+  }, [drawWave, drawSpec, drawRuler, drawTier, drawMinimap, drawScrollbar]);
 
   // dir: +1 (zoom in) or -1 (zoom out). Only drawWave() needs to rerun — this is the
   // one control in the app that provably affects only the waveform canvas.
@@ -1575,7 +1549,6 @@ export default function App() {
       if (data.error) throw new Error(data.error);
 
       formantTrackRef.current = { ...data.formants };
-      formantViewRef.current  = { t0, t1 };
       // data.spec is always null here (kind: 'formants') — the rolling-buffer prefetch
       // already keeps spectroCacheRef populated; overwriting it with this request's
       // un-widened, un-scaled strip would clobber a wider prefetched buffer, so this
@@ -1613,7 +1586,6 @@ export default function App() {
   }, []);
 
   const stopPlay = useCallback(() => {
-    console.log('[stopPlay] playhead=', playheadRef.current.toFixed(3), 'playingRef=', playingRef.current);
     stopAudio();
     setPlaying(false);
     clearOverlay();
@@ -1657,7 +1629,6 @@ export default function App() {
 
   const startPlay = useCallback((from) => {
     if (!audioBufferRef.current) return;
-    console.log('[startPlay] from=', from.toFixed(3), 'sel=', selectionRef.current ? `${selectionRef.current.t0.toFixed(3)}-${selectionRef.current.t1.toFixed(3)}` : 'null');
     stopAudio();
     const ctx = getAudioCtx();
     const doStart = () => {
@@ -1668,7 +1639,6 @@ export default function App() {
       src.playbackRate.value = rate;
       const sel = selectionRef.current;
       const to = sel ? sel.t1 : durationRef.current;
-      console.log('[doStart] from=', from.toFixed(3), 'to=', to.toFixed(3), 'dur=', (to - from).toFixed(3), 'sel=', sel ? `${sel.t0.toFixed(3)}-${sel.t1.toFixed(3)}` : 'null');
       // Increment generation before setting timing refs so any in-flight RAF
       // tick from a previous play chain self-cancels immediately.
       const gen = ++playGenRef.current;
@@ -1688,7 +1658,6 @@ export default function App() {
       const perfOffset = (nextQuantumCtx - ctxNow) * 1000;
       // playStartPerfRef = the perf.now() value at which audio actually begins
       const audioStartPerf = perfNow + perfOffset;
-      playStartCtxRef.current = nextQuantumCtx;
       playStartPerfRef.current = audioStartPerf;
       playStartAtRef.current = from;
       playEndAtRef.current = to;
@@ -1696,7 +1665,6 @@ export default function App() {
       src.start(0, from);
       src.stop(nextQuantumCtx + audioDur);
       src.onended = () => {
-        console.log('[onended] gen=', gen, 'current=', playGenRef.current, 'playingRef=', playingRef.current, 'playhead=', playheadRef.current.toFixed(3), 'playEndAt=', playEndAtRef.current.toFixed(3));
         // Stale source — a new startPlay has already taken over.
         if (gen !== playGenRef.current) return;
         // If playingRef is already false, stopAudio() was called manually (pause).
@@ -2173,7 +2141,6 @@ export default function App() {
               xT(Math.max(0, Math.min(rect.width, ev.clientX - rect.left)), rect.width)));
             playheadRef.current = t;
             updateTimeDisplay();
-            console.log('[seek] click at t=', t.toFixed(3), 'playing=', playingRef.current, 'sel=', selectionRef.current);
             if (playingRef.current) { stopPlay(); startPlay(t); } else redraw();
           }
         };
@@ -2267,7 +2234,7 @@ export default function App() {
       if (editModeRef.current) { setPopup(null); return; }
       const rect = canvas.getBoundingClientRect();
       const t = xT(e.clientX - rect.left, rect.width);
-      const items = typeof getItems === 'function' ? getItems() : (getItems ? wordsRef.current : phonesRef.current);
+      const items = getItems();
       const item = items.find(it => t >= it.t0 && t <= it.t1);
       if (!item) { setPopup(null); return; }
       let left = e.clientX - 80, top = rect.top - 62;
@@ -2451,8 +2418,6 @@ export default function App() {
               playheadRef.current = t;
               updateTimeDisplay();
               if (playingRef.current) { stopPlay(); startPlay(t); } else redraw();
-            } else {
-              const s = selectionRef.current;
             }
           };
           window.addEventListener('mousemove', onMove);
@@ -2960,19 +2925,6 @@ export default function App() {
   };
 
   // ── Label editor commit ───────────────────────────────────────────────
-  /*
-  const commitLabel = useCallback((newText) => {
-    const ed = labelEditor;
-    if (!ed) return;
-    const src = ed.tierId === 'words' ? wordsRef.current
-              : ed.tierId === 'phones' ? phonesRef.current
-              : (customTiersRef.current.find(t => t.id === ed.tierId)?.items ?? []);
-    const updated = src.map(it => it.id === ed.id ? { ...it, text: newText } : it);
-    commitTierItems(ed.tierId, updated);
-    setLabelEditor(null);
-    redraw();
-  }, [labelEditor, commitTierItems, redraw]);
-  */
   const commitLabel = useCallback((newText) => {
     const ed = labelEditor;
     if (!ed) return;
@@ -3372,7 +3324,6 @@ export default function App() {
         {(() => {
           const running = mfaQueue.find(j => j.status === 'running');
           const pending = mfaQueue.filter(j => j.status === 'pending');
-          const errors  = mfaQueue.filter(j => j.status === 'error');
           const busy    = !!running;
           const queueCount = pending.length + (running ? 1 : 0);
           const label = running
