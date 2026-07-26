@@ -562,6 +562,8 @@ export default function App() {
   const [duration, setDuration]         = useState(70);
   const [playing, setPlaying]           = useState(false);
   const [loopMode, setLoopMode]         = useState(false);
+  const [loopToast, setLoopToast]       = useState(false);
+  const loopToastTimerRef               = useRef(null);
   const [autoPlayTile, setAutoPlayTile] = useState(false);
   const [zoomValue, setZoomValue]       = useState(72);
   const [popup, setPopup]               = useState(null);
@@ -1464,6 +1466,9 @@ export default function App() {
         updateTimeDisplay();
         drawOverlay();
         if (loopModeRef.current && sel && playingRef.current) {
+          setLoopToast(true);
+          clearTimeout(loopToastTimerRef.current);
+          loopToastTimerRef.current = setTimeout(() => setLoopToast(false), 5000);
           startPlay(sel.t0);
           return;
         }
@@ -3602,6 +3607,21 @@ export default function App() {
             style={{ background: 'none', border: 'none', color: '#f0b840', cursor: 'pointer', fontSize: 14, padding: '0 0 0 4px', flexShrink: 0, lineHeight: 1, alignSelf: 'flex-start' }}
             title="Dismiss"
           >×</button>
+        </div>
+      )}
+
+      {/* ── Loop toast ───────────────────────────────────────────────────── */}
+      {loopToast && (
+        <div style={{
+          position: 'fixed', top: 16, left: '50%', transform: 'translateX(-50%)', zIndex: 8000,
+          background: '#10101a', border: '1px solid #3050a0', borderRadius: 14,
+          padding: '20px 28px', maxWidth: 760,
+          fontFamily: 'Inter,system-ui,sans-serif', fontSize: 24, color: '#a0c0f0',
+          display: 'flex', alignItems: 'center', gap: 20,
+          boxShadow: '0 4px 16px rgba(0,0,0,0.5)',
+        }}>
+          <img src="/loop-alert.gif" alt="" style={{ height: 64, borderRadius: 8, flexShrink: 0 }} />
+          <span>Looping selection…</span>
         </div>
       )}
 
