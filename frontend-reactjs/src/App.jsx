@@ -2222,9 +2222,7 @@ export default function App() {
         redraw();
         return;
       }
-      /*
       if (multiKey) {
-        // Ctrl/Cmd+click — toggle tile in/out of multi-selection, no drag
         if (selectedTilesRef.current.has(item.id)) {
           selectedTilesRef.current.delete(item.id);
         } else {
@@ -2233,38 +2231,21 @@ export default function App() {
         selectionAnchorRef.current = { id: item.id, tierId };
         syncSelectionState();
         redraw();
-        return;
-      }
-      */
 
-      if (multiKey) {
-        // ctrl/cmd click or drag tiles for tile selection
-        const sorted = [...items].sort((a, b) => a.t0 - b.t0);
-        const anchor = (selectionAnchorRef.current && selectionAnchorRef.current.tierId === tierId)
-          ? selectionAnchorRef.current
-          : { id: item.id, tierId };
-        const selectRangeTo = (targetId) => {
-          const ai = sorted.findIndex(it => it.id === anchor.id);
-          const bi = sorted.findIndex(it => it.id === targetId);
-          if (ai === -1 || bi === -1) return;
-          const [lo, hi] = ai <= bi ? [ai, bi] : [bi, ai];
-          selectedTilesRef.current.clear();
-          for (let i = lo; i <= hi; i++) {
-            selectedTilesRef.current.set(sorted[i].id, { id: sorted[i].id, tierId });
-          }
-          syncSelectionState();
-          redraw();
-        };
-        selectRangeTo(item.id);
+        const touched = new Set([item.id]);
         const onMove = (ev) => {
-          const hit = hitTest(canvas, itemsRef.current, ev.clientX, ev.clientY);
-          if (hit) selectRangeTo(hit.item.id);
+          const h = hitTest(canvas, itemsRef.current, ev.clientX, ev.clientY);
+          if (h && !touched.has(h.item.id)) {
+            touched.add(h.item.id);
+            selectedTilesRef.current.set(h.item.id, { id: h.item.id, tierId });
+            syncSelectionState();
+            redraw();
+          }
         };
         const onUp = () => {
           window.removeEventListener('mousemove', onMove);
           window.removeEventListener('mouseup', onUp);
         };
-        selectionAnchorRef.current = anchor;
         window.addEventListener('mousemove', onMove);
         window.addEventListener('mouseup', onUp);
         return;
