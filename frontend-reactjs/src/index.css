@@ -46,11 +46,14 @@ html, body {
 /*scroll across the tool bar*/
 /*
 .toolbar {
-  min-height: 54px; height: auto; flex-shrink: 0;
-  display: flex; align-items: center; gap: 12px; padding: 6px 16px;
+  height: 54px; flex-shrink: 0;
+  display: flex; align-items: center; gap: 12px; padding: 0 16px;
   background: var(--bg-ui); border-bottom: 1px solid var(--border-ui2);
-  flex-wrap: wrap;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
 }
+.toolbar > * { flex-shrink: 0; }
   */
 
 .logo { font-weight: 600; font-size: 13px; color: var(--text); letter-spacing: -0.3px; display: flex; align-items: center; gap: 0; }
