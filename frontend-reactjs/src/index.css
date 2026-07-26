@@ -29,11 +29,30 @@ html, body {
 }
 
 /* ── Toolbar ── */
+/*
 .toolbar {
   height: 54px; flex-shrink: 0;
   display: flex; align-items: center; gap: 12px; padding: 0 16px;
   background: var(--bg-ui); border-bottom: 1px solid var(--border-ui2);
 }
+  */
+/* wrap to another row */
+.toolbar {
+  min-height: 54px; height: auto; flex-shrink: 0;
+  display: flex; align-items: center; gap: 12px; padding: 6px 16px;
+  background: var(--bg-ui); border-bottom: 1px solid var(--border-ui2);
+  flex-wrap: wrap;
+}
+/*scroll across the tool bar*/
+/*
+.toolbar {
+  min-height: 54px; height: auto; flex-shrink: 0;
+  display: flex; align-items: center; gap: 12px; padding: 6px 16px;
+  background: var(--bg-ui); border-bottom: 1px solid var(--border-ui2);
+  flex-wrap: wrap;
+}
+  */
+
 .logo { font-weight: 600; font-size: 13px; color: var(--text); letter-spacing: -0.3px; display: flex; align-items: center; gap: 0; }
 .logo span { color: var(--text-mute); font-weight: 400; font-size: 12px; margin-left: 6px; }
 .save-indicator {
