@@ -34,9 +34,7 @@ You can also load files at any time without restarting:
 
 ## Tips and Tricks for Annotating
 
-- **Key Reminder**: you can press "1" to edit instead of manually clicking the edit button. That shortcut key can also be remapped to any other button:
-  
-  <img width="358" height="73" alt="image" src="https://github.com/user-attachments/assets/4ec3a556-5837-443e-9292-e9de6ed5cfbd" />
+- **Key Reminder**: edit mode is on by default — press **`1`** at any time to toggle it off/on.
 
 ### Navigation
 
@@ -49,7 +47,9 @@ You can also load files at any time without restarting:
 | Zoom at cursor | `Ctrl/Cmd + scroll` |
 | Pan left/right | Horizontal scroll, Arrow keys (20% of view), or drag the minimap |
 | Fit full audio | `F` |
-| Reset to start | `Home` |
+| Force-refresh spectrogram | `R` or ↻ Force Refresh button |
+| Waveform amplitude zoom | `+`/`-` buttons next to the "WV" label, or `+`/`-` keys after clicking the waveform |
+| Tile text size | `+`/`-` buttons in the SHOW bar, or `+`/`-` keys after clicking a tile |
 | Seek | Click anywhere on the waveform, spectrogram, or ruler |
 | Select tile | Click any tile (edit mode not required) — moves playhead to onset and sets play region |
 | Play tile | After selecting a tile, press `Space` or ▶ Play |
@@ -67,7 +67,7 @@ Use the **SHOW** checkbox bar at the top of the tier area to hide/show individua
 
 ### Edit mode
 
-Press **`1`** (default, configurable) or click the **✎ Edit** button to enter edit mode. The button shows the current shortcut key on its right side — click that side to rebind it to any key.
+Edit mode is **on by default**. Press **`1`** to toggle between edit mode and view mode.
 
 In edit mode, a hint bar appears at the bottom of the tier area showing all available shortcuts.
 
@@ -86,7 +86,8 @@ In edit mode, a hint bar appears at the bottom of the tier area showing all avai
 - **Click a grouped tile without dragging** — collapses selection back to just that tile
 - **`⌫` / Delete key** — deletes all selected tiles across all tiers in one undoable operation
 
-**Undo:** `Ctrl/Cmd+Z` — steps back through all edit operations (max 100 steps).
+**Undo:** `Ctrl/Cmd+Z` or the **↶** toolbar button — steps back through all edit operations (max 100 steps).
+**Redo:** `Ctrl/Cmd+Y` or the **↷** toolbar button — steps forward again through undone operations.
 
 ### Saving
 
@@ -113,12 +114,17 @@ Click **↓ Export** to download the annotations as a file. Two format options:
 | `Space` | Play / Pause |
 | `L` | Toggle loop |
 | `F` | Fit full audio in view |
-| `Home` | Reset view to first 20 s |
-| `1` *(configurable)* | Toggle edit mode |
+| `R` | Force-refresh the spectrogram for the current view |
+| `1` | Toggle edit mode (on by default) |
 | `Ctrl/Cmd+S` | Save TextGrid to disk (dev only) |
 | `Ctrl/Cmd+Z` | Undo |
+| `Ctrl/Cmd+Y` | Redo |
+| `Ctrl/Cmd+C` | Copy selected tile(s), including a group across tiers (edit mode, requires a selection) |
+| `Ctrl/Cmd+V` | Paste copied tile(s) as new tile(s) anchored at the playhead (edit mode) |
 | `⌫` / `Delete` | Delete selected tile(s) (edit mode) |
-| `Ctrl/Cmd+click` | Add/remove tile from multi-selection (edit mode) |
+| `Shift+click` | Range-select tiles from the last-selected tile to the clicked tile (edit mode) |
+| `Ctrl/Cmd+click` (or drag) | Range-select tiles — same as `Shift+click` (edit mode) |
 | `←` / `→` | Pan view by 20% |
+| `+` / `-` | Zoom waveform amplitude, or tile text size if a tier was last clicked |
 
-The edit mode shortcut can be changed by clicking the key badge on the right side of the Edit button and pressing any key.
+> These shortcuts are also available in-app: click the **GSA** logo in the top-left of the toolbar to open the keyboard-shortcuts reference at any time.
