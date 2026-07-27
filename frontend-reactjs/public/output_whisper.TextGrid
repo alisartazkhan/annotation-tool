@@ -2,7 +2,7 @@ File type = "ooTextFile"
 Object class = "TextGrid"
 
 xmin = 0
-xmax = 358.470500
+xmax = 70.000000
 tiers? <exists>
 size = 2
 item []:
@@ -10,7 +10,7 @@ item []:
         class = "IntervalTier"
         name = "words"
         xmin = 0
-        xmax = 358.470500
+        xmax = 70.000000
         intervals: size = 275
         intervals [1]:
             xmin = 0.000000
@@ -64,8 +64,8 @@ item []:
         intervals [12]:
             xmin = 3.413000
             xmax = 3.973000
-            text = "pizza"
-            score = 0.62
+            text = "pizza/"
+            score = 1
         intervals [13]:
             xmin = 3.973000
             xmax = 3.993000
@@ -91,8 +91,8 @@ item []:
         intervals [18]:
             xmin = 4.773000
             xmax = 5.774000
-            text = "pineapples."
-            score = 0.39
+            text = "pineapples"
+            score = 1
         intervals [19]:
             xmin = 5.774000
             xmax = 5.794000
@@ -122,15 +122,15 @@ item []:
             score = 0.827
         intervals [25]:
             xmin = 6.774000
-            xmax = 6.814000
+            xmax = 6.824000
             text = ""
         intervals [26]:
-            xmin = 6.814000
-            xmax = 7.455000
+            xmin = 6.824000
+            xmax = 7.465000
             text = "mushrooms,"
             score = 0.8
         intervals [27]:
-            xmin = 7.455000
+            xmin = 7.465000
             xmax = 7.475000
             text = ""
         intervals [28]:
@@ -496,8 +496,8 @@ item []:
         intervals [108]:
             xmin = 29.243000
             xmax = 29.724000
-            text = "Ready."
-            score = 0.633
+            text = "Ready"
+            score = 1
         intervals [109]:
             xmin = 29.724000
             xmax = 31.015000
@@ -518,15 +518,15 @@ item []:
             score = 0.344
         intervals [113]:
             xmin = 31.967000
-            xmax = 32.007000
+            xmax = 32.016000
             text = ""
         intervals [114]:
-            xmin = 32.007000
-            xmax = 32.588000
-            text = "pizza."
-            score = 0.731
+            xmin = 32.016000
+            xmax = 32.597000
+            text = "pizza"
+            score = 1
         intervals [115]:
-            xmin = 32.588000
+            xmin = 32.597000
             xmax = 32.888000
             text = ""
         intervals [116]:
@@ -1247,13 +1247,13 @@ item []:
             score = 0.135
         intervals [275]:
             xmin = 69.958000
-            xmax = 358.470500
+            xmax = 70.000000
             text = ""
     item [2]:
         class = "IntervalTier"
         name = "phones"
         xmin = 0
-        xmax = 358.470500
+        xmax = 70.000000
         intervals: size = 469
         intervals [1]:
             xmin = 0.000000
@@ -3129,5 +3129,5 @@ item []:
             text = "d"
         intervals [469]:
             xmin = 69.958000
-            xmax = 358.470500
+            xmax = 70.000000
             text = ""
