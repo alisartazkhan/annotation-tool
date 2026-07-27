@@ -562,6 +562,8 @@ export default function App() {
   const [duration, setDuration]         = useState(70);
   const [playing, setPlaying]           = useState(false);
   const [loopMode, setLoopMode]         = useState(false);
+  const [loopToast, setLoopToast]       = useState(false);
+  const loopToastTimerRef               = useRef(null);
   const [autoPlayTile, setAutoPlayTile] = useState(false);
   const [zoomValue, setZoomValue]       = useState(72);
   const [popup, setPopup]               = useState(null);
@@ -1099,13 +1101,13 @@ export default function App() {
       const hasScore = isWord && item.score != null;
       const isEdited   = isWord && item.edited;
       const fill   = isSelected ? (isWord ? 'rgba(58,123,213,0.55)' : 'rgba(60,200,130,0.50)')
-                   : isEdited   ? (inEdit ? 'rgba(58,123,213,0.40)' : 'rgba(58,123,213,0.28)')
+                   : isEdited   ? (inEdit ? 'rgba(135,206,250,0.40)' : 'rgba(135,206,250,0.28)')
                    : hasScore   ? scoreColor(item.score, inEdit ? 0.40 : 0.28)
                    :              (inEdit ? editFill : fillColor);
       const stroke = isSelected ? (isWord ? '#7aacf0' : '#60e8a0')
-                   : isEdited   ? '#3a7bd5'
+                   : isEdited   ? '#87cefa'
                    : hasScore   ? scoreColor(item.score, 0.75)
-                   :              strokeColor;            
+                   :              strokeColor;
       ctx.fillStyle = fill;
       ctx.fillRect(x0, ry + 2, bw, rowH - 4);
       ctx.strokeStyle = stroke; ctx.lineWidth = isSelected ? 2 : (inEdit ? 1.5 : 1);
@@ -1464,6 +1466,9 @@ export default function App() {
         updateTimeDisplay();
         drawOverlay();
         if (loopModeRef.current && sel && playingRef.current) {
+          setLoopToast(true);
+          clearTimeout(loopToastTimerRef.current);
+          loopToastTimerRef.current = setTimeout(() => setLoopToast(false), 5000);
           startPlay(sel.t0);
           return;
         }
@@ -2552,6 +2557,17 @@ export default function App() {
         redraw();
       });
 
+      if (isWord) {
+        menuItem('Validate word', () => {
+          pushUndo();
+          const updated = itemsRef.current.map(it =>
+            it.id === item.id ? { ...it, edited: true, score: 1 } : it
+          );
+          commitItems(updated);
+          redraw();
+        });
+      }
+
       const sep = document.createElement('div');
       Object.assign(sep.style, { height: '1px', background: '#2e2e3a', margin: '4px 0' });
       menu.appendChild(sep);
@@ -3591,6 +3607,21 @@ export default function App() {
             style={{ background: 'none', border: 'none', color: '#f0b840', cursor: 'pointer', fontSize: 14, padding: '0 0 0 4px', flexShrink: 0, lineHeight: 1, alignSelf: 'flex-start' }}
             title="Dismiss"
           >×</button>
+        </div>
+      )}
+
+      {/* ── Loop toast ───────────────────────────────────────────────────── */}
+      {loopToast && (
+        <div style={{
+          position: 'fixed', top: 16, left: '50%', transform: 'translateX(-50%)', zIndex: 8000,
+          background: '#10101a', border: '1px solid #3050a0', borderRadius: 14,
+          padding: '20px 28px', maxWidth: 760,
+          fontFamily: 'Inter,system-ui,sans-serif', fontSize: 24, color: '#a0c0f0',
+          display: 'flex', alignItems: 'center', gap: 20,
+          boxShadow: '0 4px 16px rgba(0,0,0,0.5)',
+        }}>
+          <img src="/loop-alert.gif" alt="" style={{ height: 64, borderRadius: 8, flexShrink: 0 }} />
+          <span>Looping selection…</span>
         </div>
       )}
 

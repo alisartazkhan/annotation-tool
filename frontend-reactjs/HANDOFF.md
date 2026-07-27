@@ -718,6 +718,9 @@ src.onended = () => {
   updateTimeDisplay();
   drawOverlay();
   if (loopModeRef.current && sel && playingRef.current) {
+    setLoopToast(true);
+    clearTimeout(loopToastTimerRef.current);
+    loopToastTimerRef.current = setTimeout(() => setLoopToast(false), 5000);
     startPlay(sel.t0);   // increments playGenRef → kills current RAF chain
     return;
   }
@@ -730,6 +733,15 @@ src.onended = () => {
 ```
 
 **Do not** divide `audioDur` by `playbackRate` when passing to `src.stop()` — the Web Audio API applies rate internally, so `src.stop(startCtx + (to - from) / rate)` is the correct call.
+
+### Loop toast
+
+Each time the loop restarts (same `onended` branch above), a toast pops up top-center of the screen for 5 seconds and then disappears:
+
+- State: `loopToast` (bool) + `loopToastTimerRef` (holds the `setTimeout` id so rapid loop restarts reset the 5s timer instead of stacking).
+- Rendered near the other fixed-position toasts (~line 3613): a `position: fixed` box, top-center, containing `public/loop-alert.gif` (64px tall) and the text "Looping selection…".
+- The gif file lives at `public/loop-alert.gif` and is referenced as `/loop-alert.gif` (served statically by Vite from `public/`).
+- Box/gif size was intentionally doubled from the initial version (padding, font size, border radius, gap, and gif height all 2×) per user request — current gif height is 64px.
 
 ---
 
@@ -758,6 +770,28 @@ As a result, edited and new words are included in `ConfidenceDashboard` as high-
 Note: the blue tile color and the green dashboard color are independent — `drawTier` uses the `edited` flag for canvas color; `ConfidenceDashboard` uses the `score` value for histogram and stats.
 
 **◎ Scores** button toggles `ConfidenceDashboard` — stat grid, 10-bin histogram, color legend, 5 lowest-confidence words.
+
+### Validate word (right-click context menu)
+
+Word tiles have a **"Validate word"** option in the right-click context menu (edit mode only, word tier only). It does not add a separate "validated" state — it reuses the existing `edited`/light-blue mechanism:
+
+```js
+if (isWord) {
+  menuItem('Validate word', () => {
+    pushUndo();
+    const updated = itemsRef.current.map(it =>
+      it.id === item.id ? { ...it, edited: true, score: 1 } : it
+    );
+    commitItems(updated);
+    redraw();
+  });
+}
+```
+
+- Sets `edited: true` and `score: 1` on the tile, then commits via `commitTierItems` (undoable).
+- Renders identically to any other edited word — light blue fill/stroke (see above), no distinct visual for "validated" vs. "manually edited."
+- Because `score` is forced to `1`, a validated word also shows as a perfect-confidence entry in `ConfidenceDashboard`.
+- **No keyboard shortcut** and **no double-click trigger** — right-click context menu only, currently.
 
 ---
 
