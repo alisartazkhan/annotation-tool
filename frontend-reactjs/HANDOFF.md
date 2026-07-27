@@ -71,7 +71,7 @@ Every hot-path value has **both** a `useState` and a `useRef`. The state drives 
 | `editMode` | `editModeRef` | Edit vs select mode |
 | `loopMode` | `loopModeRef` | Loop playback |
 | `colormapName` | `colormapNameRef` | Spectrogram colormap |
-| `showFormants` | `showFormantsRef` | Formant overlay toggle |
+| `formantVisible` | `formantVisibleRef` | Per-formant overlay toggles (`{ f1, f2, f3 }`) |
 | `playbackRate` | `playbackRateRef` | Playback speed multiplier |
 
 **Rule:** always update both together — `ref.current = n; setState(n)`.
@@ -776,6 +776,15 @@ Formants are computed by `dsp_server.py` using `parselmouth` (Python bindings fo
 
 Triggered by "Generate Formants" button → `calcFormantForView` → `/api/compute-dsp` → returns `formants` alongside the spectrogram. Both are updated together in one request.
 
+### Analysis window: padding + fixed-grid quantization (2026-07-26/27)
+
+`compute_formants(wav_path, t0, t1)` does **not** analyze the exact `[t0, t1]` region handed to it — two fixes layered on top of each other, both required:
+
+1. **Edge padding.** The decoded window is padded by `pad_sec = 0.1` on each side (comfortably more than half the 25ms Burg window) before being handed to Praat, and any returned frame outside `[t0, t1]` is discarded afterward. Extracting exactly `[t0, t1]` with no padding starves frames within ~12.5ms of either edge of a full analysis window — this produced visibly noisy/wrong formant values right at the edges of whatever region was on screen (every region, since this runs fresh per view). Verified directly: an unpadded 1.0–2.0s request only produced frames covering `1.0281`–`1.9719`, missing ~28ms of coverage at *each* edge.
+2. **Fixed-grid quantization.** Praat's short-term analyses don't just anchor frames to the buffer's start time — the whole frame grid is *centered* within `[xmin, xmax]`, so it depends on the buffer's total duration too. Padding relative to the *view's own* `t0`/`t1` (fix #1 alone) means every recompute gets a slightly different buffer duration and therefore a differently-phased frame grid — verified directly that two buffers sharing the same start time but differing in duration by under half a millisecond produced frame grids offset by nearly half a frame-step. Comparing "nearest frame" values between two such differently-phased grids swung F2 by up to ~1600 Hz in testing even though the underlying audio barely changed (Burg per-frame formant estimation has no cross-frame continuity constraint, so a small window-placement change can land on a materially different root/formant fit) — this is what caused formants to visibly "jump" when regenerated after a small pan/zoom. Fixed by quantizing *both* edges of the padded window onto a fixed absolute-time grid — `FORMANT_CHUNK_SEC = 3.0`s multiples measured from t=0 — instead of leaving them as continuous functions of the current view. Any two "Generate Formants" clicks whose padded window rounds to the same `[a0, a1]` now hand Praat the literal same `Sound` object, so results over their overlap are bit-identical rather than approximately close (verified: 0 mismatches across 300+ shared frame times between test views offset by 37ms and by half a frame-step). Tradeoff: each request analyzes a fixed ~3s-ish chunk rather than a tightly-fitted one — acceptable since "Generate Formants" is a manual, occasional action, not a per-scroll-tick one.
+
+`compute_formants` also reuses `_get_audio_slice()`'s bounded/cached decode (the same one the spectrogram path uses) instead of re-reading the whole file from disk on every call.
+
 ### Formant data shape
 
 ```js
@@ -789,11 +798,17 @@ formantTrackRef.current = {
 }
 ```
 
-`times[]` replaces the old `hop/frames` indexing. The renderer in `drawSpec` does a binary search on `times[]` to find the nearest frame for each canvas pixel — no frame-rate arithmetic needed.
+`times[]` replaces the old `hop/frames` indexing.
 
-### Toggle
+### Rendering: Praat-style scatter dots (2026-07-27)
 
-The "Generate Formants" card has an inline pill toggle ("Overlay on/off") that sets `showFormantsRef` without recomputing. Formants are drawn on the spectrogram canvas only when `showFormantsRef.current === true`.
+`drawSpec` draws one small filled circle (`DOT_R = 3` px) per actual analysis frame that falls in the current view, color-coded per formant (F1 red / F2 green / F3 blue) — not a connected line. This replaced an earlier implementation that looped over every *pixel column*, binary-searched `times[]` for the nearest frame, and drew a connected line through the results; that interpolated a straight line between frames that could be tens of ms apart when zoomed out, which doesn't match Praat's own per-frame dot display. The new version is also simpler: no binary search, no pixel-column loop, no `useTimes`/legacy `hop`/`frames`-shape branch (that legacy shape was already dead — the only producer was the now-deleted `formantWorker.js`, see below). Dots naturally thin out when zoomed in (fewer frames per pixel) and cluster when zoomed out (more frames per pixel).
+
+**Y-axis matches the spectrogram exactly.** Formant dots use the same mel-scale mapping as the spectrogram's own frequency-axis ticks — `melHz = 2595·log10(1 + hz/700)`, `FMAX = min(8000, ft.sr/2)` for the dots vs. a flat `8000` for the tick labels (equal in practice for any file with sample rate ≥16kHz, which is effectively all of them). A dot at a given y-position lines up with the frequency-axis labels and the spectrogram pixels directly behind it — there's no independent scaling to keep in sync.
+
+### Per-formant toggles (2026-07-27)
+
+Replaced the old single "Overlay on/off" pill toggle with four buttons — **F1**, **F2**, **F3**, **All** — each independently showing/hiding that formant's dot track (previously toggling was all-or-nothing). State lives in `formantVisibleRef`/`formantVisible` (dual state+ref, `{ f1, f2, f3 }` booleans, default all `true`). `toggleFormant(key)` flips one and redraws; `toggleAllFormants()` turns all three on if any are currently off, or all three off if all three are on. Each F1/F2/F3 button lights up in the same color as its dot track (red/green/blue via `.formant-card__seg-btn--f1/f2/f3.on`); "All" uses the neutral accent color. `calcFormantForView` re-enables all three if a fresh "Generate Formants" click finds every formant currently toggled off (mirrors the old auto-enable-on-generate behavior).
 
 ### Legacy worker
 
@@ -932,7 +947,7 @@ The edit mode hotkey is hardcoded to `1` in the keydown handler. The check match
   --bg-tooltip, --border-tooltip, --text-soft     /* tooltips, secondary text */
   --shadow-color, --backdrop                      /* box-shadow / modal scrim */
   --kbd-*                                          /* shortcut-key chip styling (shortcuts popover) */
-  --card-*, --toggle-track-*                      /* formant-card / spectrogram overlay HUD */
+  --card-*                                         /* formant-card / spectrogram overlay HUD */
   --warn-*, --error-*, --save-*                   /* status-color families (keep hue across themes) */
   --mfa-*, --export-*, --tier-*                   /* semantic button families (keep hue across themes) */
   --mono                                /* "JetBrains Mono", monospace */
@@ -1107,6 +1122,8 @@ This must stay in `index.html`, not move into a React effect — React can't run
 
 - **`calcSpecForView` and `calcFormantForView` both require `publicWavFileRef.current` to be set.** This ref is only populated when the wav was auto-loaded from `public/` — it is `null` for any other source. Both functions guard on it and return early if null.
 
+- **`compute_formants`'s padded analysis window must stay quantized to the fixed `FORMANT_CHUNK_SEC` grid — never pad relative to the view's own `t0`/`t1` directly.** Praat centers its analysis frame grid across the whole buffer duration, not just its start time, so a window that floats with the current view produces a differently-phased (and therefore different-valued) frame grid on every recompute — this was a real, verified bug (formants visibly jumping after a small pan/zoom + regenerate) before the fix. See [Formant Tracking](#formant-tracking) for the full writeup.
+
 - **Do not name local variables `pw`/`ph` in the same scope as the destructured `data.spec`.** `const { png, pw, ph } = data.spec` will conflict with any outer `const pw`/`const ph` in the same block, causing a `ReferenceError: Cannot access uninitialized variable`. Use aliased destructuring: `const { png, pw: spw, ph: sph } = data.spec`.
 
 - **The `spectroCacheRef` local cache has no `ph` equality check.** The PNG's own bitmap dimensions always match the requested canvas dimensions, so the height always matches. The old JS worker path stored `ph` and checked it; that check has been removed.
@@ -1161,9 +1178,13 @@ When `/api/public-files` returns more than one `.wav` or `.TextGrid`, the app re
 
 Follow-ups to pick up next session — flag any of these and we can plan/implement from here:
 
+See also `CODE_REVIEW_FINDINGS.md` (repo root) — a separate simplification/efficiency punch list from a 2026-07-25 review pass covering `App.jsx`, the DSP/MFA backends, and the ASR pipeline. Its dead-code section (unused refs, a dead `commitLabel`/`pushUndo`/`popUndo` duplicate, a no-op `drawFreqAxis` stub, a handful of leftover debug `console.log`s, unused Python imports in `asr/aligner.py`/`asr/textgrid_writer.py`) is fully checked off as of 2026-07-26; the remaining efficiency/duplication items there (the `addTierEditInteraction` snap-boundary recompute, `aligner.py`'s per-segment WAV writes, OOV-match caching, and others) are still open — check that file for current status before starting work, since it's updated independently of this one.
+
 1. Clarify save behavior — see [Save to Disk](#save-to-disk-ctrlcmds). Does `Ctrl/Cmd+S` silently overwrite the existing TextGrid on disk? If so, show the user a confirmation popup before/when that overwrite happens.
-2. Fix issues in formant generation and add pitch (F0) tracking alongside F1/F2/F3 — see [Formant Tracking](#formant-tracking).
+2. ~~Fix issues in formant generation~~ — done 2026-07-26/27: fixed noisy/wrong values at the edges of the analysis window (missing padding) and formants visibly jumping between recomputes of a slightly-different view (frame-grid phase drift); also switched the overlay from connected lines to Praat-style scatter dots with independent F1/F2/F3/All toggles — see [Formant Tracking](#formant-tracking). Still open: add pitch (F0) tracking alongside F1/F2/F3. `parselmouth`/Praat already has a well-established `Sound.to_pitch()` for this — the recommended path, rather than a new dependency (a `phonlab` LPC/IFC-based tracker was evaluated for its bundled F0 output and rejected: its LPC path is a simpler reimplementation of the same Burg math `parselmouth` already runs as real Praat C++ code, and its IFC alternative is slower and needs a speaker-class guess as input).
 3. Change playback so Play only plays the currently-visible section of the timeline (like Audacity), rather than the current selection/full-duration behavior — see [Playback](#playback).
-4. Audit for more light-mode contrast bugs. The invisible white-on-white Export "Cancel" button and the still-dark ruler bar (both fixed 2026-07) were found by manually clicking through in light mode, not a systematic pass — there are likely other spots with the same class of issue (a white-text button class combined with a transparent background, or a hardcoded dark literal in a `draw*` function that should join the [light-mode plot background exception](#theming-lightdark-mode)).
-5. If queueing delay from the [persistent DSP worker](#persistent-worker-latency)'s single-process FIFO design shows up in practice (a slow formants request delaying queued spec requests), consider a small worker pool instead of one process — not implemented so far since normal usage (formants requests are manual/occasional) hasn't needed it.
-6. **Bug**: Selecting tiles across tiers doesn't work — reported by the user as broken. Needs investigation into `addTierEditInteraction`'s mousedown/shift-click/ctrl-click handling and `selectedTilesRef`/`syncSelectionState` (see [Tile Selection & Multi-Select](#tile-selection--multi-select)) to find where cross-tier selection breaks. Note: the mousedown handler's active `multiKey` (Ctrl/Cmd+click) branch implements a same-tier-only range-select (it resets `selectionAnchorRef` whenever the clicked tile's `tierId` differs from the anchor's), and the only code that ever supported toggling arbitrary tiles into a selection regardless of tier is commented out just above it (search "toggle tile in/out of multi-selection") — that's the most likely root cause to start from.
+4. If queueing delay from the [persistent DSP worker](#persistent-worker-latency)'s single-process FIFO design shows up in practice (a slow formants request delaying queued spec requests), consider a small worker pool instead of one process — not implemented so far since normal usage (formants requests are manual/occasional) hasn't needed it.
+5. **Bug**: Selecting tiles across tiers doesn't work — reported by the user as broken. Needs investigation into `addTierEditInteraction`'s mousedown/shift-click/ctrl-click handling and `selectedTilesRef`/`syncSelectionState` (see [Tile Selection & Multi-Select](#tile-selection--multi-select)) to find where cross-tier selection breaks. Note: the mousedown handler's active `multiKey` (Ctrl/Cmd+click) branch implements a same-tier-only range-select (it resets `selectionAnchorRef` whenever the clicked tile's `tierId` differs from the anchor's), and the only code that ever supported toggling arbitrary tiles into a selection regardless of tier is commented out just above it (search "toggle tile in/out of multi-selection") — that's the most likely root cause to start from.
+6. Add up/down (increment/decrement) buttons for the timeline zoom control, alongside the existing `ZOOM` slider (`handleZoom`/`zoomValue` — see [CSS](#css) toolbar conventions and the waveform y-zoom `+`/`-` buttons in [Manual y-zoom control](#manual-y-zoom-control) for the established stepper-button pattern to mirror).
+7. Audit formant tracking accuracy against Praat itself — open the same audio file directly in Praat, generate formants there with matching settings (5500 Hz ceiling, 25ms window, see [Formant Tracking](#formant-tracking)), and compare F1/F2/F3 values at several time points to confirm this app's `dsp_server.py` output actually matches Praat's own numbers now that the edge-padding and frame-grid-jump bugs are fixed.
+8. Add a higher-resolution spectrogram option. Current analysis parameters (`WIN_LENGTH=2048`, `N_FFT=4096`, see [Analysis parameters](#analysis-parameters-matches-audacitys-own-spectrogram-settings-defaults)) are hardcoded to match Audacity's own defaults — investigate whether a sharper/higher-resolution mode is worth adding (e.g. a larger `N_FFT` or a toggle), and what the tradeoffs are (compute cost per `/api/compute-dsp` request, payload size, whether it's needed given the mel-warped display axis already limits perceptible detail at typical zoom levels).

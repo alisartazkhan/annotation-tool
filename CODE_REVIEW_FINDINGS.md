@@ -65,13 +65,48 @@ Status legend: `[ ]` not started, `[x]` done. Update as items are fixed.
    `const onMove = ...` (next to where `neighbour`/`origsByTier`/`selectedIds` are
    already computed), and just close over the array inside `onMove`.
 
-2. **`dsp_server.py` formants always decode the full file from disk.**
-   `frontend-reactjs/dsp_server.py:210-216, 280-308`. `compute_formants()` calls
-   `parselmouth.Sound(wav_path)` unconditionally, bypassing the `_audio_cache`/
-   bounded-slice logic (`_get_audio_slice`) that the spectrogram path already uses.
-   For files > 10 min this is strictly worse than the neighboring spec code path.
-   **Fix**: build `parselmouth.Sound(values=y_slice, sampling_frequency=sr)` from
-   the array `_get_audio_slice()` already returns instead of re-reading from disk.
+2. ~~**`dsp_server.py` formants always decode the full file from disk.**~~ ✅ fixed
+   2026-07-25, and turned out to be bundled with a real correctness bug, not just an
+   efficiency one.
+   `frontend-reactjs/dsp_server.py:210-253`. `compute_formants()` called
+   `parselmouth.Sound(wav_path)` (whole file) then `extract_part(from_time=t0,
+   to_time=t1)` with **no padding** before running Praat's 25ms-window Burg
+   analysis. Frames within ~12.5ms of either edge didn't have a full window of
+   audio to analyze — verified directly: over a 1.0–2.0s test region, the old code
+   produced only 152 frames covering `1.0281`–`1.9719` (missing ~28ms of coverage
+   at *each* edge); after the fix, 160 frames cover `1.00313`–`1.99687`, right up
+   to the requested boundaries. Since "Generate Formants" always computes for the
+   *current view*, every formant request had this gap at both edges of whatever
+   was on screen — this, not the LPC/Burg algorithm itself, was almost certainly
+   the source of the "formant values look wrong/noisy" complaint.
+   **Fix applied**: pad the decode window by 0.1s (comfortably more than half the
+   25ms Burg window) on each side, build the `Sound` directly from
+   `_get_audio_slice()`'s array via `parselmouth.Sound(y, sampling_frequency=sr,
+   start_time=a0)` (which also fixes the full-file-decode inefficiency for free,
+   since it now reuses the same bounded/cached slice the spectrogram path uses),
+   run Burg analysis on the padded `Sound`, then discard any returned frame whose
+   time falls outside `[t0, t1]`.
+
+   **Follow-up fix, same day**: after the above, formants still visibly "jumped"
+   between recomputes of slightly different (but overlapping) views. Root cause:
+   Praat's short-term analyses don't just anchor frames to the buffer's start
+   time — the whole frame grid is *centered* within `[xmin, xmax]`, so it depends
+   on the buffer's total duration too. Verified directly: two `Sound` objects
+   sharing the same `xmin` but differing in duration by under half a millisecond
+   got frame grids shifted by nearly half a frame-step; comparing "nearest frame"
+   values from two such differently-phased grids swung F2 by up to ~1600 Hz
+   across a 2s test file even though the underlying audio barely changed (Burg
+   per-frame estimates have no cross-frame continuity constraint, so a small
+   window-placement change can land on a materially different root/formant fit).
+   **Fix applied**: quantize *both* edges of the padded window onto a fixed
+   absolute-time grid (multiples of `FORMANT_CHUNK_SEC = 3.0`s from t=0) instead
+   of leaving them as continuous functions of the current view — any two
+   requests whose padded window rounds to the same `[a0, a1]` now hand Praat the
+   literal same `Sound` object. Verified: 0 mismatches across 315-320 shared
+   frame times between test views offset by 37ms and by half a frame-step
+   (previously 100s-of-Hz mismatches on the same cases). Tradeoff: a coarser,
+   chunk-sized decode/analysis per request instead of a tightly-fitted one —
+   acceptable since "Generate Formants" is a manual, occasional action.
 
 3. **`aligner.py` writes every segment to its own temp WAV file and rereads it.**
    `asr/aligner.py:306-347`. Each segment re-slices the already-resampled

@@ -47,9 +47,6 @@
 
   --row-active-bg: #1a1a24;
 
-  --toggle-track-bg: #2a2a38;
-  --toggle-track-border: #3a3a50;
-
   --warn-computing: #f0c070;
   --warn-rgb: 240, 192, 112;
   --warn-bg: #221a08;
@@ -132,9 +129,6 @@
   --card-select-text: #2a2a30;
 
   --row-active-bg: #e8eef7;
-
-  --toggle-track-bg: #dcdce2;
-  --toggle-track-border: #c0c0ca;
 
   --warn-computing: #a06a00;
   --warn-rgb: 160, 106, 0;
@@ -428,29 +422,24 @@ html, body {
 .formant-card__generate:hover { background: rgba(var(--accent-rgb),0.2); color: var(--accent-strong); }
 .formant-card__generate.computing { color: var(--warn-computing); cursor: wait; }
 .formant-card__generate:disabled { pointer-events: none; }
-.formant-card__toggle {
-  display: flex; align-items: center; gap: 6px;
-  padding: 4px 10px; border: none; background: transparent;
-  cursor: pointer; font-family: inherit; font-size: 11px; color: var(--card-icon);
-  transition: color 100ms;
+.formant-card__seg {
+  display: flex; align-items: stretch;
 }
-.formant-card__toggle:hover { color: var(--card-icon-hover); }
-.formant-card__toggle.on { color: var(--accent-soft); }
-.formant-card__toggle-track {
-  position: relative; width: 24px; height: 12px; border-radius: 6px;
-  background: var(--toggle-track-bg); border: 1px solid var(--toggle-track-border);
-  transition: background 150ms, border-color 150ms; flex-shrink: 0;
+.formant-card__seg-btn {
+  flex: 1; padding: 4px 8px; border: none; background: transparent;
+  border-right: 1px solid rgba(var(--accent-rgb),0.25);
+  cursor: pointer; font-family: inherit; font-size: 10px; font-weight: 600;
+  color: var(--card-icon); transition: background 100ms, color 100ms;
 }
-.formant-card__toggle.on .formant-card__toggle-track {
-  background: rgba(var(--accent-rgb),0.5); border-color: var(--accent);
-}
-.formant-card__toggle-thumb {
-  position: absolute; top: 1px; left: 1px;
-  width: 8px; height: 8px; border-radius: 50%;
-  background: var(--card-icon); transition: transform 150ms, background 150ms;
-}
-.formant-card__toggle.on .formant-card__toggle-thumb {
-  transform: translateX(12px); background: var(--accent-soft);
+.formant-card__seg-btn:last-child { border-right: none; }
+.formant-card__seg-btn:hover { color: var(--card-icon-hover); background: rgba(var(--accent-rgb),0.12); }
+/* Each F1/F2/F3 button lights up in the same color as its dot track on the
+   spectrogram when active; the trailing "All" button uses the neutral accent. */
+.formant-card__seg-btn--f1.on { color: #ff5050; background: rgba(255,80,80,0.18); }
+.formant-card__seg-btn--f2.on { color: #50dc50; background: rgba(80,220,80,0.18); }
+.formant-card__seg-btn--f3.on { color: #5090ff; background: rgba(80,140,255,0.18); }
+.formant-card__seg-btn.on:not(.formant-card__seg-btn--f1):not(.formant-card__seg-btn--f2):not(.formant-card__seg-btn--f3) {
+  color: var(--accent-strong); background: rgba(var(--accent-rgb),0.25);
 }
 .calc-spec-btn {
   padding: 4px 10px; border-radius: 5px; border: 1px solid rgba(var(--accent-rgb),0.5);

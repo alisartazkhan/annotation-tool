@@ -654,7 +654,7 @@ export default function App() {
   const [popup, setPopup]               = useState(null);
   const [dropping, setDropping]         = useState(false);
   const [colormapName, setColormapName] = useState('jet');
-  const [showFormants, setShowFormants] = useState(false);
+  const [formantVisible, setFormantVisible] = useState({ f1: true, f2: true, f3: true });
   const [specComputing, setSpecComputing] = useState(false);
   const [formantComputing, setFormantComputing] = useState(false);
   const [editMode, setEditMode]         = useState(true);
@@ -746,7 +746,7 @@ export default function App() {
   const customTierDivRefs = useRef({}); // keyed by tier id — the .tier div element
   const durationRef      = useRef(70);
   const colormapNameRef  = useRef('jet');
-  const showFormantsRef  = useRef(false);
+  const formantVisibleRef = useRef({ f1: true, f2: true, f3: true }); // which formant dot-tracks are drawn
   const rmsEnvRef        = useRef(null);
   const formantTrackRef  = useRef(null);
   const editModeRef      = useRef(true);
@@ -1039,46 +1039,37 @@ export default function App() {
     }
 
     drawSelectionRect(ctx, w, h, 0.18);
-    if (showFormantsRef.current) {
+    {
       const ft = formantTrackRef.current;
-      if (ft) {
+      const fv = formantVisibleRef.current;
+      if (ft && Array.isArray(ft.times) && (fv.f1 || fv.f2 || fv.f3)) {
         const FMAX = Math.min(8000, ft.sr / 2);
-        const hzToMelY = (hz) => {
-          const melHz  = 2595 * Math.log10(1 + hz   / 700);
-          const melMax = 2595 * Math.log10(1 + FMAX  / 700);
-          return h - (melHz / melMax) * h;
-        };
-        const colors = ['rgba(255,80,80,0.85)', 'rgba(80,220,80,0.85)', 'rgba(80,140,255,0.85)'];
-        // Support both Praat times[] and legacy hop/frames formats
-        const useTimes = Array.isArray(ft.times) && ft.times.length > 0;
-        const rT0 = ft.regionT0 ?? 0;
-        const regionDur = useTimes
-          ? ft.times[ft.times.length - 1] - ft.times[0] + 0.001
-          : ((ft.frames - 1) * ft.hop + (ft.frameSize ?? 1024)) / ft.sr;
-        for (const [fi, fdata] of [[0, ft.f1], [1, ft.f2], [2, ft.f3]]) {
-          ctx.strokeStyle = colors[fi]; ctx.lineWidth = 1.5;
-          ctx.beginPath();
-          let started = false;
-          for (let cx = 0; cx < w; cx++) {
-            const t = t0 + (cx / w) * (t1 - t0);
-            const localT = t - rT0;
-            if (localT < 0 || localT > regionDur) { started = false; continue; }
-            let fr;
-            if (useTimes) {
-              // Binary search for nearest frame by time
-              const tAbs = t;
-              let lo = 0, hi = ft.times.length - 1;
-              while (lo < hi) { const mid = (lo + hi) >> 1; if (ft.times[mid] < tAbs) lo = mid + 1; else hi = mid; }
-              fr = lo;
-            } else {
-              fr = Math.max(0, Math.min(ft.frames - 1, Math.floor((localT / regionDur) * ft.frames)));
-            }
-            const hz = fdata[fr];
-            if (!hz) { started = false; continue; }
-            const fy = hzToMelY(hz);
-            if (!started) { ctx.moveTo(cx, fy); started = true; } else ctx.lineTo(cx, fy);
+        const melMax = 2595 * Math.log10(1 + FMAX / 700);
+        const hzToMelY = (hz) => h - (2595 * Math.log10(1 + hz / 700) / melMax) * h;
+        const DOT_R = 3;
+        const formants = [
+          ['f1', ft.f1, 'rgba(255,80,80,0.85)'],
+          ['f2', ft.f2, 'rgba(80,220,80,0.85)'],
+          ['f3', ft.f3, 'rgba(80,140,255,0.85)'],
+        ];
+        // Praat-style scatter: one dot per actual analysis frame (not one per pixel
+        // column) — draws only the frames that fall in the current view, so dots
+        // naturally thin out when zoomed in and cluster when zoomed out, matching
+        // Praat's own formant-track rendering instead of interpolating a line.
+        for (const [key, fdata, color] of formants) {
+          if (!fv[key] || !fdata) continue;
+          ctx.fillStyle = color;
+          for (let i = 0; i < ft.times.length; i++) {
+            const t = ft.times[i];
+            if (t < t0 || t > t1) continue;
+            const hz = fdata[i];
+            if (!hz) continue; // 0 = unvoiced/no value
+            const x = tX(t, w);
+            const y = hzToMelY(hz);
+            ctx.beginPath();
+            ctx.arc(x, y, DOT_R, 0, Math.PI * 2);
+            ctx.fill();
           }
-          ctx.stroke();
         }
       }
     }
@@ -1104,7 +1095,7 @@ export default function App() {
     }
 
     drawPlayheadLine(ctx, w, h);
-  }, [drawSelectionRect, drawPlayheadLine]);
+  }, [drawSelectionRect, drawPlayheadLine, tX]);
 
   const drawRuler = useCallback(() => {
     const s = setupCanvas(rulerCanvasRef.current);
@@ -1286,6 +1277,21 @@ export default function App() {
       fontScaleRef.current * (dir > 0 ? FONT_SCALE_STEP : 1 / FONT_SCALE_STEP)));
     redraw(); // affects all tier canvases (words/phones/custom) — no single-canvas shortcut here
   }, [redraw]);
+
+  const toggleFormant = useCallback((key) => {
+    const next = { ...formantVisibleRef.current, [key]: !formantVisibleRef.current[key] };
+    formantVisibleRef.current = next;
+    setFormantVisible(next);
+    drawSpec(); // only the spectrogram canvas draws formant dots
+  }, [drawSpec]);
+
+  const toggleAllFormants = useCallback(() => {
+    const allOn = formantVisibleRef.current.f1 && formantVisibleRef.current.f2 && formantVisibleRef.current.f3;
+    const next = { f1: !allOn, f2: !allOn, f3: !allOn };
+    formantVisibleRef.current = next;
+    setFormantVisible(next);
+    drawSpec();
+  }, [drawSpec]);
 
   // Returns all tier items as { id, items } excluding the given set of tier ids
   const getAllTiers = useCallback(() => [
@@ -1554,7 +1560,13 @@ export default function App() {
       // un-widened, un-scaled strip would clobber a wider prefetched buffer, so this
       // request never asks the server to compute one in the first place.
 
-      if (!showFormantsRef.current) { showFormantsRef.current = true; setShowFormants(true); }
+      // If the user had toggled every formant off, a fresh generate should show them again.
+      const fv = formantVisibleRef.current;
+      if (!fv.f1 && !fv.f2 && !fv.f3) {
+        const next = { f1: true, f2: true, f3: true };
+        formantVisibleRef.current = next;
+        setFormantVisible(next);
+      }
       drawSpec();
     } catch (e) {
       console.error('[calcFormantForView]', e);
@@ -3514,16 +3526,25 @@ export default function App() {
                   >
                     {formantComputing ? '⟳ Generating…' : '⟳ Generate Formants'}
                   </button>
-                  <button
-                    className={`formant-card__toggle${showFormants ? ' on' : ''}`}
-                    onClick={() => { const n = !showFormants; showFormantsRef.current = n; setShowFormants(n); redraw(); }}
-                    title="Toggle formant overlay"
-                  >
-                    <span className="formant-card__toggle-track">
-                      <span className="formant-card__toggle-thumb" />
-                    </span>
-                    <span className="formant-card__toggle-label">{showFormants ? 'Overlay on' : 'Overlay off'}</span>
-                  </button>
+                  <div className="formant-card__seg">
+                    {['f1', 'f2', 'f3'].map(key => (
+                      <button
+                        key={key}
+                        className={`formant-card__seg-btn formant-card__seg-btn--${key}${formantVisible[key] ? ' on' : ''}`}
+                        onClick={() => toggleFormant(key)}
+                        title={`Toggle ${key.toUpperCase()} dots`}
+                      >
+                        {key.toUpperCase()}
+                      </button>
+                    ))}
+                    <button
+                      className={`formant-card__seg-btn${formantVisible.f1 && formantVisible.f2 && formantVisible.f3 ? ' on' : ''}`}
+                      onClick={toggleAllFormants}
+                      title="Toggle all formants"
+                    >
+                      All
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
