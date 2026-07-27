@@ -21,7 +21,7 @@ export const SHORTCUTS = [
   { keys: ['L'], desc: 'Toggle loop' },
   { keys: ['F'], desc: 'Fit full duration in view' },
   { keys: ['R'], desc: 'Force-refresh the spectrogram for the current view' },
-  { keys: ['1'], desc: 'Toggle edit mode (on by default)' },
+  { keys: ['1'], desc: 'Toggle edit mode on/off (on by default)' },
   { keys: ['←', '→'], desc: 'Pan the view by 20% of the current span' },
   { keys: ['+', '-'], desc: 'Zoom the waveform amplitude, or tile text size if a tier was last clicked' },
   { keys: ['Ctrl/Cmd+S'], desc: 'Save the TextGrid to disk' },
@@ -37,7 +37,7 @@ export const SHORTCUTS = [
 export const TILE_EDITING_HINTS = [
   { keys: ['Click'], desc: 'Select a tile' },
   { keys: ['Double-click'], desc: 'Rename a tile (opens the label editor)' },
-  { keys: ['Right-click'], desc: 'Open the context menu — rename, merge with next, or delete' },
+  { keys: ['Right-click'], desc: 'Open the context menu — rename, merge with next, delete, or validate confidence score 1' },
   { keys: ['Click+Drag'], desc: 'Set a loop selection region' },
   { keys: ['Click+Alt+Drag'], desc: 'Drag a tile edge without snapping to nearby boundaries' },
 ];
