@@ -2199,6 +2199,15 @@ export default function App() {
       const { item, side } = hit;
       const multiKey = e.ctrlKey || e.metaKey;
       if (e.shiftKey) {
+        // Shift+click ranges are per-tier and ADDITIVE across tiers: selecting a
+        // range of words then a range of phonemes keeps both, so the two ranges
+        // can be dragged together. Only this tier's previous range is replaced,
+        // which lets the user re-adjust a range without losing the other tiers.
+        const clearThisTierOnly = () => {
+          for (const [selId, entry] of [...selectedTilesRef.current]) {
+            if (entry.tierId === tierId) selectedTilesRef.current.delete(selId);
+          }
+        };
         const anchor = selectionAnchorRef.current;
         if (anchor && anchor.tierId === tierId) {
           const sorted = [...items].sort((a, b) => a.t0 - b.t0);
@@ -2206,7 +2215,7 @@ export default function App() {
           const bi = sorted.findIndex(it => it.id === item.id);
           if (ai !== -1 && bi !== -1) {
             const [lo, hi] = ai <= bi ? [ai, bi] : [bi, ai];
-            selectedTilesRef.current.clear();
+            clearThisTierOnly();
             for (let i = lo; i <= hi; i++) {
               selectedTilesRef.current.set(sorted[i].id, { id: sorted[i].id, tierId });
             }
@@ -2215,7 +2224,8 @@ export default function App() {
             return;
           }
         }
-        selectedTilesRef.current.clear();
+        // No usable anchor in this tier — start a new range here, keeping other tiers.
+        clearThisTierOnly();
         selectedTilesRef.current.set(item.id, { id: item.id, tierId });
         selectionAnchorRef.current = { id: item.id, tierId };
         syncSelectionState();

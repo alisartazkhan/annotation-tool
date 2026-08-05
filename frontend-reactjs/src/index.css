@@ -43,6 +43,18 @@ html, body {
   background: var(--bg-ui); border-bottom: 1px solid var(--border-ui2);
   flex-wrap: wrap;
 }
+
+.toolbar > * { flex-shrink: 0; }
+.toolbar .btn,
+.toolbar .load-btn,
+.toolbar .btn-edit-split,
+.toolbar .btn-edit-split__main,
+.toolbar .btn-edit-split__badge {
+  height: 34px;
+  display: inline-flex; align-items: center; justify-content: center;
+  box-sizing: border-box; line-height: 1;
+}
+.toolbar .btn-edit-split__badge { min-width: 30px; padding: 0 9px; }
 /*scroll across the tool bar*/
 /*
 .toolbar {
@@ -63,7 +75,10 @@ html, body {
   font-family: var(--mono); padding: 2px 7px; border-radius: 4px;
   animation: save-fadein 80ms ease;
 }
-.save-indicator--unsaved { color: #c8a040; background: rgba(200,160,40,0.15); }
+.save-indicator--unsaved {
+  color: #1a1a1a; background: #ffc93c; font-weight: 700;
+  border: 1px solid #ffdf7a; box-shadow: 0 0 8px rgba(255,201,60,0.5);
+}
 .save-indicator--saving  { color: #7aacf0; background: rgba(58,123,213,0.15); }
 .save-indicator--saved   { color: #60c880; background: rgba(60,200,100,0.15); }
 .save-indicator--error   { color: #f07070; background: rgba(220,80,80,0.15); }
