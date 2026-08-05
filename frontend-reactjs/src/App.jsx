@@ -1630,10 +1630,17 @@ export default function App() {
     playheadRef.current = t;
     updateTimeDisplay();
     const { t0, t1 } = viewRef.current;
-    const span = t1 - t0, pad = span * 0.12;
-    if (playheadRef.current > t1 - pad) {
-      const newT0 = Math.min(DUR - span, playheadRef.current - pad);
-      viewRef.current = { t0: newT0, t1: newT0 + span };
+    const span = t1 - t0;
+    const half = span / 2;
+    let desiredT0 = Math.max(0, Math.min(DUR - span, playheadRef.current - half));
+    const pxW = specCanvasRef.current?.clientWidth || 0;
+    if (pxW > 0) {
+      const tPerPx = span / pxW;
+      desiredT0 = Math.round(desiredT0 / tPerPx) * tPerPx;
+      desiredT0 = Math.max(0, Math.min(DUR - span, desiredT0));
+    }
+    if (playheadRef.current > t0 + half && Math.abs(desiredT0 - t0) > 1e-6) {
+      viewRef.current = { t0: desiredT0, t1: desiredT0 + span };
       redraw();
     } else {
       drawOverlay();
@@ -2446,6 +2453,15 @@ export default function App() {
       const { item, side } = hit;
       const multiKey = e.ctrlKey || e.metaKey;
       if (e.shiftKey) {
+        // Shift+click ranges are per-tier and ADDITIVE across tiers: selecting a
+        // range of words then a range of phonemes keeps both, so the two ranges
+        // can be dragged together. Only this tier's previous range is replaced,
+        // which lets the user re-adjust a range without losing the other tiers.
+        const clearThisTierOnly = () => {
+          for (const [selId, entry] of [...selectedTilesRef.current]) {
+            if (entry.tierId === tierId) selectedTilesRef.current.delete(selId);
+          }
+        };
         const anchor = selectionAnchorRef.current;
         if (anchor && anchor.tierId === tierId) {
           const sorted = [...items].sort((a, b) => a.t0 - b.t0);
@@ -2453,7 +2469,7 @@ export default function App() {
           const bi = sorted.findIndex(it => it.id === item.id);
           if (ai !== -1 && bi !== -1) {
             const [lo, hi] = ai <= bi ? [ai, bi] : [bi, ai];
-            selectedTilesRef.current.clear();
+            clearThisTierOnly();
             for (let i = lo; i <= hi; i++) {
               selectedTilesRef.current.set(sorted[i].id, { id: sorted[i].id, tierId });
             }
@@ -2462,16 +2478,15 @@ export default function App() {
             return;
           }
         }
-        selectedTilesRef.current.clear();
+        // No usable anchor in this tier — start a new range here, keeping other tiers.
+        clearThisTierOnly();
         selectedTilesRef.current.set(item.id, { id: item.id, tierId });
         selectionAnchorRef.current = { id: item.id, tierId };
         syncSelectionState();
         redraw();
         return;
       }
-      /*
       if (multiKey) {
-        // Ctrl/Cmd+click — toggle tile in/out of multi-selection, no drag
         if (selectedTilesRef.current.has(item.id)) {
           selectedTilesRef.current.delete(item.id);
         } else {
@@ -2480,38 +2495,21 @@ export default function App() {
         selectionAnchorRef.current = { id: item.id, tierId };
         syncSelectionState();
         redraw();
-        return;
-      }
-      */
 
-      if (multiKey) {
-        // ctrl/cmd click or drag tiles for tile selection
-        const sorted = [...items].sort((a, b) => a.t0 - b.t0);
-        const anchor = (selectionAnchorRef.current && selectionAnchorRef.current.tierId === tierId)
-          ? selectionAnchorRef.current
-          : { id: item.id, tierId };
-        const selectRangeTo = (targetId) => {
-          const ai = sorted.findIndex(it => it.id === anchor.id);
-          const bi = sorted.findIndex(it => it.id === targetId);
-          if (ai === -1 || bi === -1) return;
-          const [lo, hi] = ai <= bi ? [ai, bi] : [bi, ai];
-          selectedTilesRef.current.clear();
-          for (let i = lo; i <= hi; i++) {
-            selectedTilesRef.current.set(sorted[i].id, { id: sorted[i].id, tierId });
-          }
-          syncSelectionState();
-          redraw();
-        };
-        selectRangeTo(item.id);
+        const touched = new Set([item.id]);
         const onMove = (ev) => {
-          const hit = hitTest(canvas, itemsRef.current, ev.clientX, ev.clientY);
-          if (hit) selectRangeTo(hit.item.id);
+          const h = hitTest(canvas, itemsRef.current, ev.clientX, ev.clientY);
+          if (h && !touched.has(h.item.id)) {
+            touched.add(h.item.id);
+            selectedTilesRef.current.set(h.item.id, { id: h.item.id, tierId });
+            syncSelectionState();
+            redraw();
+          }
         };
         const onUp = () => {
           window.removeEventListener('mousemove', onMove);
           window.removeEventListener('mouseup', onUp);
         };
-        selectionAnchorRef.current = anchor;
         window.addEventListener('mousemove', onMove);
         window.addEventListener('mouseup', onUp);
         return;

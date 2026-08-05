@@ -143,7 +143,7 @@ def _init_aligner():
     log.info('Loading models (one-time, ~15 s) …')
     t0 = time.time()
 
-    model = AcousticModel(str(acoustic_path))
+    model = AcousticModel(acoustic_path)
     p = model.parameters
 
     lc = LexiconCompiler(

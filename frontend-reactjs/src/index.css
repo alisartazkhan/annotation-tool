@@ -183,12 +183,46 @@ html, body {
 }
 
 /* ── Toolbar ── */
+/*
 .toolbar {
   min-height: 54px; flex-shrink: 0;
   display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 8px 16px;
   background: var(--bg-ui); border-bottom: 1px solid var(--border-ui2);
 }
-.logo { font-weight: 600; font-size: 18px; color: var(--text); letter-spacing: -0.3px; display: flex; align-items: center; gap: 0; position: relative; }
+  */
+/* wrap to another row */
+.toolbar {
+  min-height: 54px; height: auto; flex-shrink: 0;
+  display: flex; align-items: center; gap: 12px; padding: 6px 16px;
+  background: var(--bg-ui); border-bottom: 1px solid var(--border-ui2);
+  flex-wrap: wrap;
+}
+
+.toolbar > * { flex-shrink: 0; }
+.toolbar .btn,
+.toolbar .load-btn,
+.toolbar .btn-edit-split,
+.toolbar .btn-edit-split__main,
+.toolbar .btn-edit-split__badge {
+  height: 34px;
+  display: inline-flex; align-items: center; justify-content: center;
+  box-sizing: border-box; line-height: 1;
+}
+.toolbar .btn-edit-split__badge { min-width: 30px; padding: 0 9px; }
+/*scroll across the tool bar*/
+/*
+.toolbar {
+  height: 54px; flex-shrink: 0;
+  display: flex; align-items: center; gap: 12px; padding: 0 16px;
+  background: var(--bg-ui); border-bottom: 1px solid var(--border-ui2);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+}
+.toolbar > * { flex-shrink: 0; }
+  */
+
+.logo { font-weight: 600; font-size: 13px; color: var(--text); letter-spacing: -0.3px; display: flex; align-items: center; gap: 0; }
 .logo span { color: var(--text-mute); font-weight: 400; font-size: 12px; margin-left: 6px; }
 .logo-btn {
   background: none; border: none; padding: 0; margin: 0;
@@ -201,7 +235,10 @@ html, body {
   font-family: var(--mono); padding: 2px 7px; border-radius: 4px;
   animation: save-fadein 80ms ease;
 }
-.save-indicator--unsaved { color: var(--save-unsaved); background: var(--save-unsaved-bg); }
+.save-indicator--unsaved {
+  color: #1a1a1a; background: #ffc93c; font-weight: 700;
+  border: 1px solid #ffdf7a; box-shadow: 0 0 8px rgba(255,201,60,0.5);
+}
 .save-indicator--saving  { color: var(--accent-soft); background: rgba(var(--accent-rgb),0.15); }
 .save-indicator--saved   { color: var(--save-saved); background: var(--save-saved-bg); }
 .save-indicator--error   { color: var(--save-error); background: var(--save-error-bg); }

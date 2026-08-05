@@ -90,7 +90,7 @@ def _get_aligner(acoustic_model: str, dictionary: str):
     print(f'[MFA] Loading models (one-time, ~15 s) …')
     t0 = time.time()
 
-    model = AcousticModel(str(acoustic_path))
+    model = AcousticModel(acoustic_path)
     p = model.parameters
 
     lc = LexiconCompiler(

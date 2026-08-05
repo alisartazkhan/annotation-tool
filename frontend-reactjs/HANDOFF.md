@@ -357,6 +357,7 @@ The tier canvases in edit mode (`addTierEditInteraction`) also support dragging 
 
 **Committing edits**: use `commitTierItems(tierId, updated)` inside this function.
 
+**Undo/Redo**: `pushUndo()` snapshots words + phones + customTiers (max 100) onto `undoStackRef` and clears `redoStackRef`. Ctrl/Cmd+Z fires `popUndo()` (pushes current state to `redoStackRef`, restores previous) + `redraw()`. Ctrl/Cmd+Y (or Ctrl/Cmd+Shift+Z) fires `popRedo()`. Two `useState` counters, `undoCount`/`redoCount`, mirror the ref stack lengths so the toolbar Undo/Redo buttons re-render and grey out when their stack is empty (refs alone don't trigger re-renders).
 **Undo**: `pushUndo()` snapshots words + phones + customTiers (max 100). Ctrl/Cmd+Z fires `popUndo()` + `redraw()`. **Redo**: Ctrl/Cmd+Y fires `popRedo()` + `redraw()`. Both toolbar buttons are icon-only (`↶` / `↷`), with the `.btn-undo-redo` class bumping their font-size to 20px so the arrow glyphs read larger than surrounding text-label buttons — see [Keyboard Shortcuts](#keyboard-shortcuts).
 
 **Double-click empty** → creates tile, opens label editor.  
@@ -397,6 +398,14 @@ A 24px bar used to appear between the tiers and the minimap whenever edit mode w
 
 ## Tile Selection & Multi-Select
 
+## Copy/Paste Word Labels
+
+`labelClipboardRef = useRef(null)` holds the last copied label string (in-app only, not the OS clipboard).
+
+- **Ctrl/Cmd+C** — copies the label `text` of the currently selected tile into `labelClipboardRef`.
+- **Ctrl/Cmd+V** — writes that label onto **every** tile in the current multi-selection via `commitTierItems`, marking each `edited: true` (so they recolor blue and get `score: 1`). Undoable as a single `pushUndo()` snapshot.
+
+Useful for repeated words/phonemes — select many tiles, paste once.
 ### Selection state
 
 ```js
@@ -418,11 +427,15 @@ clearSelection()     // clears ref + both states
 
 Tile selection works in **both edit and non-edit mode**. In non-edit mode clicking a tile selects it and sets the play region — drag, rename, delete, and multi-select are edit-mode only.
 
+`selectionAnchorRef = useRef(null)` stores the anchor tile for range selection. Shift+click and Ctrl/Cmd+click both compute the inclusive range of tiles (by `t0` order within the tier) between the anchor and the target; Ctrl/Cmd+click also updates the range live on `mousemove` while the button is held.
+
 | Action | Mode | Result |
 |---|---|---|
 | **Plain click** a tile (not in a group) | Either | Selects tile; sets `selectionRef` to tile's `[t0, t1]`; moves playhead to `t0` |
 | **Plain click** empty space | Either | Clears tile selection and `selectionRef`; seeks playhead |
 | **Ctrl/Cmd+click** a tile | Edit only | Toggles it into/out of the multi-selection; no drag starts |
+| **Shift+click** a tile | Edit only | Selects every tile between the anchor and the clicked tile (range select) |
+| **Ctrl/Cmd+click + drag** | Edit only | Anchors on press, live-selects the range under the drag until release |
 | **Plain click** a tile in a multi-selection | Edit only | Keeps group, starts group drag |
 | **Plain click + no drag** on grouped tile | Edit only | Collapses to single selection on mouseup (detected via `didDrag` flag) |
 | **Leave edit mode** | — | Clears entire selection |
@@ -537,6 +550,8 @@ CSS classes: `.save-indicator`, `.save-indicator--unsaved`, `.save-indicator--sa
 
 ### Unsaved state tracking
 
+- A `beforeunload` window listener (its own `useEffect([isDirty])`) calls `e.preventDefault()` when `isDirty` is true, triggering the browser's native "Leave site? Changes you made may not be saved" dialog on tab close/refresh. The listener is a no-op when nothing is unsaved. Browsers ignore custom message text for this dialog — the wording is fixed by the browser.
+
 ```js
 const [isDirty, setIsDirty]  = useState(false);
 const savedTextGridRef       = useRef(null);  // serialized baseline after load or save
@@ -638,6 +653,10 @@ self.postMessage({
 ---
 
 ## MFA Server (`mfa_server.py`)
+
+### Alignment failure handling
+
+When the aligner raises an `AlignerError` (e.g. audio too short/quiet, or the words can't be aligned to the audio), the server catches it and returns **HTTP 422** with a readable JSON message instead of a raw 500 stack trace. Detected by matching `'AlignerError'`, `'could not align'`, or `'beam'` in the exception text. The frontend shows this as the red error pill.
 
 ### Model and dictionary
 
@@ -951,6 +970,9 @@ if (isWord) {
 | `1` | Toggle edit mode (on by default; not currently rebindable — see [Split Edit Button (removed)](#split-edit-button-removed)) |
 | Ctrl/Cmd+S | Save TextGrid to `public/` (dev only) |
 | Ctrl/Cmd+Z | Undo |
+| Ctrl/Cmd+Y (or Ctrl/Cmd+Shift+Z) | Redo |
+| Ctrl/Cmd+C | Copy selected tile's label |
+| Ctrl/Cmd+V | Paste label onto all selected tiles |
 | Ctrl/Cmd+Y | Redo |
 | Ctrl/Cmd+C | Copy selected tile(s) — single or group, across tiers (edit mode, requires a selection) |
 | Ctrl/Cmd+V | Paste copied tile(s) as new tile(s), anchored at the playhead (edit mode) |
@@ -968,6 +990,11 @@ The edit mode hotkey is hardcoded to `1` in the keydown handler. The check match
 
 ## CSS
 
+
+Toolbar buttons were enlarged/brightened for readability: `.btn` padding 5px→8px, font-size 12px→13.5px, brighter background (`#2f2f37`) and full-strength text color (`var(--text)` instead of `var(--text-dim)`); `.toolbar` height 44px→54px. `.load-btn` and `.btn-edit-split__main` padding were matched to the new sizing.
+
+
+`index.css` uses CSS custom properties defined in `:root` at the top of the file:
 `index.css` uses CSS custom properties defined in `:root` at the top of the file, expanded considerably by the theming work below:
 
 ```css

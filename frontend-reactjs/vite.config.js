@@ -25,7 +25,7 @@ const PYTHON = resolveAlginerPython();
 console.log(`[vite] Using Python: ${PYTHON}`);
 
 const DSP_SCRIPT = path.resolve(__dirname, 'dsp_server.py');
-const DSP_TIMEOUT_MS = 15000;
+const DSP_TIMEOUT_MS = 60000;
 
 // ── Persistent dsp_server.py worker ─────────────────────────────────────────
 // A fresh subprocess per /api/compute-dsp request paid a real, repeated cost
