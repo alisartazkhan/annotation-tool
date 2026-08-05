@@ -6,6 +6,7 @@ dependencies:
   - montreal-forced-aligner
   - librosa
   - pysoundfile
+  - pillow
   - pip
   - pip:
       - flask
