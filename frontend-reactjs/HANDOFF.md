@@ -130,6 +130,10 @@ Each item in any tier's items array is a plain object:
   row: number,       // stacking row (0 = top), assigned by assignRows()
   score?: number,    // confidence 0–1, present on word items from Whisper TextGrid
   edited?: boolean,  // true when a word has been manually created or changed
+  originalText?: string, // captured once, on the first edit, from the pre-edit `text`;
+                          // kept unchanged through later re-edits of the same word; '' for
+                          // brand-new tiles. Drives the before/after text in the "Edited
+                          // words" sidebar list and round-trips through the TextGrid file.
 }
 ```
 
@@ -403,7 +407,7 @@ A 24px bar used to appear between the tiers and the minimap whenever edit mode w
 `labelClipboardRef = useRef(null)` holds the last copied label string (in-app only, not the OS clipboard).
 
 - **Ctrl/Cmd+C** — copies the label `text` of the currently selected tile into `labelClipboardRef`.
-- **Ctrl/Cmd+V** — writes that label onto **every** tile in the current multi-selection via `commitTierItems`, marking each `edited: true` (so they recolor blue and get `score: 1`). Undoable as a single `pushUndo()` snapshot.
+- **Ctrl/Cmd+V** — writes that label onto **every** tile in the current multi-selection via `commitTierItems`, marking each `edited: true` (so they recolor dark green and get `score: 2`). Undoable as a single `pushUndo()` snapshot.
 
 Useful for repeated words/phonemes — select many tiles, paste once.
 ### Selection state
@@ -911,40 +915,54 @@ Each time the loop restarts (same `onended` branch above), a toast pops up top-c
 
 ## Confidence Score Coloring
 
-Word tiles colored by `item.score` via `scoreColor(score, alpha)`:
+Word tiles colored by `item.score` via `scoreColor(score, alpha)`. Scores ≤ 0.5 render as a red→yellow ramp (unchanged); scores > 0.5 additionally blend progressively toward white (up to 45% at score 1.0) so the high-confidence end stays light/legible in dark mode instead of reading as near-black:
 - 0.0 → red `rgb(255, 0, 50)`
 - 0.5 → yellow `rgb(255, 200, 50)`
-- 1.0 → green `rgb(0, 200, 50)`
+- 1.0 → light green `rgb(115, 225, 142)`
 
-Items without a score fall back to blue (words) or green (phonemes).
+Items without a score fall back to blue (words) or green (phonemes). The dashboard's legend gradient (see below) calls `scoreColor(0)`/`scoreColor(0.5)`/`scoreColor(1)` directly rather than hardcoding these values, so it always stays in sync with the function.
 
 ### Edited word rendering
 
-Words with `edited: true` render as **blue** on the tier canvas regardless of their score value. In `drawTier`, the `isEdited` check takes priority over `hasScore` in the fill/stroke logic, so the blue color always wins for edited words.
+Words with `edited: true` render in a fixed green — `EDITED_GREEN = rgb(0, 200, 50)` (stroke `rgb(0,200,50)` / fill `rgba(0,200,50,…)`) — on the tier canvas and minimap, regardless of their score value. This is deliberately the *old* (pre-lightening) max-confidence green — darker than the current `scoreColor(1)` output above, so edited tiles remain visually distinct from real high-confidence tiles, while no longer being so dark it looks black in dark mode (the old value was `#005000`/`rgba(0,80,0,…)`). In `drawTier`, the `isEdited` check takes priority over `hasScore` in the fill/stroke logic, so `EDITED_GREEN` always wins for edited words.
 
 ### Score assignment for edited and new words
 
-When a word is created or modified, `commitTierItems` sets `score: 1` alongside `edited: true`. This applies to all three cases handled in `commitTierItems`:
-- A word that was already previously edited (`prev?.edited`)
-- A brand new word with no previous entry (`!prev`)
-- A word whose text, `t0`, or `t1` changed from the original
+When a word is created or modified, `commitTierItems` sets `score: 2` alongside `edited: true`. This applies to all three cases handled in `commitTierItems`:
+- A word that was already previously edited (`prev?.edited`) — `originalText` carries over unchanged from the previous state
+- A brand new word with no previous entry (`!prev`) — `originalText` is set to `''`
+- A word whose text, `t0`, or `t1` changed from the original — `originalText` is set to `prev.text`, i.e. the word's text right before this edit
 
-As a result, edited and new words are included in `ConfidenceDashboard` as high-confidence entries (score 1.0, shown as green in the histogram). Previously, words without a score were filtered out of the dashboard entirely.
+`originalText` is only captured on the *first* edit of a word; later re-edits keep the original from before any of them, so the "Edited words" list (below) always shows the word's original state, not just the previous one.
 
-Note: the blue tile color and the green dashboard color are independent — `drawTier` uses the `edited` flag for canvas color; `ConfidenceDashboard` uses the `score` value for histogram and stats.
+`score: 2` is a sentinel value outside the normal 0–1 confidence range, used to mark "manually edited, not a model confidence score." `ConfidenceDashboard` explicitly filters out edited words (`w.score != null && !w.edited`), so they are **excluded** from the stat grid (mean/median/min/max), the 10-bin distribution histogram, and the lowest-confidence list entirely.
 
-**◎ Scores** button toggles `ConfidenceDashboard` — stat grid, 10-bin histogram, color legend, 5 lowest-confidence words.
+Note: the tile color and the dashboard exclusion are independent — `drawTier`/minimap use the `edited` flag for canvas color; `ConfidenceDashboard` uses the `edited` flag to filter the `score` value out of histogram and stats.
+
+**◎ Scores** button toggles `ConfidenceDashboard` — stat grid, 10-bin histogram, color legend, 5 lowest-confidence words, and (below the lowest-confidence list) an **Edited words** section.
+
+### Edited words list
+
+Below the lowest-confidence list, `EditedWordsList` renders every word with `edited: true`, showing what the word was before and what it was changed to — e.g. `~~teh~~ → the` (original struck through, next to the current text in `EDITED_GREEN`). Words with no meaningful text change are labeled `new word` (`originalText === ''`) or `validated (no change)` (originalText missing or equal to the current text, e.g. via "Validate word" below) instead of a before/after pair.
+
+### Persistence — edited state survives save/reload
+
+`edited`, `score`, and `originalText` all round-trip through the `.TextGrid` file, following the same custom-field convention:
+- `serializeTextGrid` (App.jsx) writes `edited = true` and `original = "<text>"` as extra lines inside each interval, alongside the existing `score = <value>` line, whenever `it.edited`/`it.originalText` are set. Like `score`, both are omitted when exporting in Praat-compatible mode (`praatCompat`), since Praat doesn't recognize them.
+- `parseTextGrid.js` reads `edited = true|1` and `original = "<text>"` back off each interval (mirroring its existing `score =` parsing) and attaches them to the parsed item as `item.edited`/`item.originalText`.
+
+Because of this, reloading a saved TextGrid restores both the `EDITED_GREEN` tile coloring and the full "Edited words" list (with correct before/after text) exactly as they were before saving.
 
 ### Validate word (right-click context menu)
 
-Word tiles have a **"Validate word"** option in the right-click context menu (edit mode only, word tier only). It does not add a separate "validated" state — it reuses the existing `edited`/light-blue mechanism:
+Word tiles have a **"Validate word"** option in the right-click context menu (edit mode only, word tier only). It does not add a separate "validated" state — it reuses the existing `edited`/green mechanism:
 
 ```js
 if (isWord) {
   menuItem('Validate word', () => {
     pushUndo();
     const updated = itemsRef.current.map(it =>
-      it.id === item.id ? { ...it, edited: true, score: 1 } : it
+      it.id === item.id ? { ...it, edited: true, score: 2 } : it
     );
     commitItems(updated);
     redraw();
@@ -952,9 +970,9 @@ if (isWord) {
 }
 ```
 
-- Sets `edited: true` and `score: 1` on the tile, then commits via `commitTierItems` (undoable).
-- Renders identically to any other edited word — light blue fill/stroke (see above), no distinct visual for "validated" vs. "manually edited."
-- Because `score` is forced to `1`, a validated word also shows as a perfect-confidence entry in `ConfidenceDashboard`.
+- Sets `edited: true` and `score: 2` directly on the tile, then commits via `commitItems` → `commitTierItems` (undoable). Because the item already carries `edited: true` going in, `commitTierItems`'s own change-detection branch (which would set `originalText`) never fires for it — `originalText` stays unset, so it shows as `validated (no change)` in the Edited words list.
+- Renders identically to any other edited word — `EDITED_GREEN` fill/stroke (see above), no distinct visual for "validated" vs. "manually edited."
+- Because `score` is forced to `2` and `edited` is `true`, a validated word is excluded from `ConfidenceDashboard`'s stats and histogram like any other edited word.
 - **No keyboard shortcut** and **no double-click trigger** — right-click context menu only, currently.
 
 ---

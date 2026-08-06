@@ -65,6 +65,14 @@ The annotation area shows stacked tiers below the waveform and spectrogram:
 
 Use the **SHOW** checkbox bar at the top of the tier area to hide/show individual tiers. Tiers can be resized by dragging the dividers between them. The **AUTO-PLAY** checkbox (right side of the SHOW bar) makes clicking any tile immediately play its audio without needing to press Play.
 
+### Confidence scores & edited words
+
+Words you create or manually change (by editing, moving, or resizing a tile, or via **Validate word** in the right-click menu) are marked as **edited** and highlighted in green on the tile, separate from the confidence-score color scale.
+
+Click **◎ Scores** in the toolbar to open the confidence dashboard: stats (mean/median/min/max), a 10-bin histogram, a color legend, and the 5 lowest-confidence words. Below the lowest-confidence list, an **Edited words** section lists every edited word, showing what it was before and what it was changed to (e.g. ~~teh~~ → the).
+
+Edited status, and the before/after text, are saved into the `.TextGrid` file along with everything else — so the next time the file is loaded, the Edited words list and the green tile highlighting reappear exactly as they were.
+
 ### Edit mode
 
 Edit mode is **on by default**. Press **`1`** to toggle between edit mode and view mode.
