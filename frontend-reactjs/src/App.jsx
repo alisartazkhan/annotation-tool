@@ -263,10 +263,26 @@ function LabelEditorPopover({ editor, onCommit, onClose }) {
   );
 }
 
+// Edited words are stamped with this exact tone so they visually read as
+// "confirmed correct" rather than an editing artifact.
+const EDITED_GREEN = [0, 169, 165]; // #00A9A5
+// Words with a perfect (1.0) confidence score get this exact tone instead of the
+// lightened end of the scoreColor() gradient, so they read as clearly "max confidence".
+const SCORE_ONE_GREEN = [0, 200, 50]; // #00C832
+
 function scoreColor(score, alpha = 1) {
-  const r = score < 0.5 ? 255 : Math.round(255 * (1 - (score - 0.5) * 2));
-  const g = score > 0.5 ? 200 : Math.round(200 * score * 2);
-  return alpha < 1 ? `rgba(${r},${g},50,${alpha})` : `rgb(${r},${g},50)`;
+  let r = score < 0.5 ? 255 : Math.round(255 * (1 - (score - 0.5) * 2));
+  let g = score > 0.5 ? 200 : Math.round(200 * score * 2);
+  let b = 50;
+  if (score > 0.5) {
+    // Progressively tint the high-confidence half toward white so it stays legible
+    // (not near-black) in dark mode, while keeping scores ordered by relative brightness.
+    const lighten = Math.min(1, (score - 0.5) * 2) * 0.45;
+    r = Math.round(r + (255 - r) * lighten);
+    g = Math.round(g + (255 - g) * lighten);
+    b = Math.round(b + (255 - b) * lighten);
+  }
+  return alpha < 1 ? `rgba(${r},${g},${b},${alpha})` : `rgb(${r},${g},${b})`;
 }
 
 function pixelsToCanvas(res) {
@@ -318,6 +334,8 @@ function serializeTextGrid(duration, wordItems, phoneItems, customTiers = [], pr
       if (it.t0 > cursor + 1e-9) intervals.push({ t0: cursor, t1: it.t0, text: '' });
       const iv = { t0: it.t0, t1: it.t1, text: it.text };
       if (it.score != null) iv.score = it.score;
+      if (it.edited) iv.edited = true;
+      if (it.edited && it.originalText) iv.originalText = it.originalText;
       intervals.push(iv);
       cursor = it.t1;
     }
@@ -335,6 +353,8 @@ function serializeTextGrid(duration, wordItems, phoneItems, customTiers = [], pr
       lines.push(`            xmax = ${iv.t1.toFixed(6)}`);
       lines.push(`            text = "${iv.text}"`);
       if (iv.score != null && !praatCompat) lines.push(`            score = ${iv.score}`);
+      if (iv.edited && !praatCompat) lines.push(`            edited = true`);
+      if (iv.originalText && !praatCompat) lines.push(`            original = "${iv.originalText}"`);
     });
   });
 
@@ -552,13 +572,15 @@ function ShortcutsPopover({ onClose }) {
 }
 
 function ConfidenceDashboard({ words }) {
-  const scored = words.filter(w => w.score != null).sort((a, b) => a.score - b.score);
+  const scored = words.filter(w => w.score != null && !w.edited).sort((a, b) => a.score - b.score);
+  const edited = words.filter(w => w.edited);
   if (scored.length === 0) {
     return (
       <div className="confidence-dashboard">
         <div style={{ color: 'var(--text-mute)', fontSize: 12, padding: 16, textAlign: 'center' }}>
           No score data in this TextGrid
         </div>
+        <EditedWordsList edited={edited} />
       </div>
     );
   }
@@ -618,7 +640,7 @@ function ConfidenceDashboard({ words }) {
       <div style={{ fontSize: 9, color: 'var(--text-mute)', fontFamily: "'JetBrains Mono',monospace", marginBottom: 4 }}>LEGEND</div>
       <div style={{
         height: 8, borderRadius: 4, marginBottom: 4,
-        background: 'linear-gradient(to right, rgb(255,0,50), rgb(255,200,50), rgb(0,200,50))',
+        background: `linear-gradient(to right, ${scoreColor(0)}, ${scoreColor(0.5)}, ${scoreColor(1)})`,
       }} />
       <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 8, color: 'var(--text-dark)', fontFamily: "'JetBrains Mono',monospace", marginBottom: 14 }}>
         <span>Low</span><span>High</span>
@@ -638,7 +660,54 @@ function ConfidenceDashboard({ words }) {
           </span>
         </div>
       ))}
+
+      <EditedWordsList edited={edited} />
     </div>
+  );
+}
+
+function EditedWordsList({ edited }) {
+  return (
+    <>
+      <div style={{ fontSize: 9, color: 'var(--text-mute)', fontFamily: "'JetBrains Mono',monospace", marginTop: 14, marginBottom: 4 }}>
+        EDITED WORDS ({edited.length})
+      </div>
+      {edited.length === 0
+        ? <div style={{ fontSize: 11, color: 'var(--text-dark)', padding: '3px 0' }}>None</div>
+        : edited.map(w => {
+          const before = w.originalText;
+          const changedText = before != null && before !== '' && before !== w.text;
+          const isNew = before === '' || before == null;
+          return (
+            <div key={w.id} style={{ padding: '4px 0', borderBottom: '1px solid var(--border)' }}>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 4, overflow: 'hidden' }}>
+                {changedText && (
+                  <>
+                    <span style={{
+                      fontSize: 11, color: 'var(--text-dark)', textDecoration: 'line-through',
+                      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 64,
+                    }}>
+                      {before}
+                    </span>
+                    <span style={{ fontSize: 10, color: 'var(--text-mute)', flexShrink: 0 }}>→</span>
+                  </>
+                )}
+                <span style={{
+                  fontSize: 12, fontWeight: 600, color: `rgb(${EDITED_GREEN.join(',')})`,
+                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                }}>
+                  {w.text || '<empty>'}
+                </span>
+              </div>
+              {!changedText && (
+                <div style={{ fontSize: 9, color: 'var(--text-mute)', fontFamily: "'JetBrains Mono',monospace" }}>
+                  {isNew ? 'new word' : 'validated'}
+                </div>
+              )}
+            </div>
+          );
+        })}
+    </>
   );
 }
 
@@ -792,11 +861,13 @@ export default function App() {
       const prevById = new Map(wordsRef.current.map(it => [it.id, it]));
       const marked = updated.map(it => {
         const prev = prevById.get(it.id);
-        // Already edited, newly created, or changed → mark edited
-        if (prev?.edited) return { ...it, edited: true, score: 1 };
-        if (!prev) return { ...it, edited: true, score: 1 };
+        // Already edited, newly created, or changed → mark edited.
+        // originalText is captured once, on the first edit, and kept through later re-edits
+        // so the "Edited words" list always shows the word as it originally appeared.
+        if (prev?.edited) return { ...it, edited: true, score: 2, originalText: prev.originalText };
+        if (!prev) return { ...it, edited: true, score: 2, originalText: '' };
         if (prev.text !== it.text || prev.t0 !== it.t0 || prev.t1 !== it.t1) {
-          return { ...it, edited: true, score: 1 };
+          return { ...it, edited: true, score: 2, originalText: prev.text };
         }
         return it;
       });
@@ -927,8 +998,9 @@ export default function App() {
       // fixed baseline.
       const gain = (fullPeakRef.current > 0.01 ? 0.46 / fullPeakRef.current : 0.5) * yZoomRef.current;
 
+      const isLight = themeRef.current === 'light';
       if (rawCh && samplesPerPx <= 2) {
-        ctx.strokeStyle = '#c8c6c1'; ctx.lineWidth = 1.5;
+        ctx.strokeStyle = isLight ? '#000000' : '#ffffff'; ctx.lineWidth = 1.5;
         ctx.beginPath();
         let started = false;
         const steps = Math.max(w, Math.ceil((t1 - t0) * rawLen / DUR));
@@ -943,7 +1015,7 @@ export default function App() {
         if (samplesPerPx < 0.25) {
           const iA = Math.max(0, Math.floor((t0 / DUR) * rawLen));
           const iB = Math.min(rawLen - 1, Math.ceil((t1 / DUR) * rawLen));
-          ctx.fillStyle = '#4a8be5';
+          ctx.fillStyle = isLight ? '#000000' : '#ffffff';
           for (let i = iA; i <= iB; i++) {
             const t = (i / rawLen) * DUR;
             const x = ((t - t0) / (t1 - t0)) * w;
@@ -952,7 +1024,7 @@ export default function App() {
           }
         }
       } else if (rawCh && samplesPerPx <= 200) {
-        ctx.fillStyle = '#3a7bd5';
+        ctx.fillStyle = isLight ? '#000000' : '#ffffff';
         for (let cx = 0; cx < w; cx++) {
           const tA = t0 + (cx / w) * (t1 - t0);
           const tB = t0 + ((cx + 1) / w) * (t1 - t0);
@@ -970,7 +1042,7 @@ export default function App() {
         }
         const rms = rmsEnvRef.current;
         if (rms) {
-          ctx.strokeStyle = 'rgba(120,210,255,0.6)'; ctx.lineWidth = 1.2;
+          ctx.strokeStyle = isLight ? 'rgba(0,0,0,0.6)' : 'rgba(255,255,255,0.6)'; ctx.lineWidth = 1.2;
           for (const sign of [-1, 1]) {
             ctx.beginPath(); let started = false;
             for (let cx = 0; cx < w; cx++) {
@@ -985,7 +1057,7 @@ export default function App() {
       } else {
         const peakData = data || new Float32Array(0);
         const N = peakData.length;
-        ctx.fillStyle = '#3a6bb5';
+        ctx.fillStyle = isLight ? '#000000' : '#ffffff';
         for (let cx = 0; cx < w; cx++) {
           const tA = t0 + (cx / w) * (t1 - t0);
           const idx = Math.max(0, Math.min(N - 1, Math.floor((tA / DUR) * N)));
@@ -1137,9 +1209,9 @@ export default function App() {
     const numRows = Math.max(1, ...items.map(it => (it.row ?? 0) + 1));
     const rowH = h / numRows;
     const inEdit = editModeRef.current;
-    const fillColor   = isWord ? 'rgba(58,123,213,0.18)'  : 'rgba(60,200,130,0.15)';
-    const strokeColor = isWord ? 'rgba(58,123,213,0.45)'  : 'rgba(60,200,130,0.4)';
-    const editFill    = isWord ? 'rgba(58,123,213,0.30)'  : 'rgba(60,200,130,0.28)';
+    const fillColor   = isWord ? 'rgba(58,123,213,0.18)'  : 'rgba(170,130,220,0.15)';
+    const strokeColor = isWord ? 'rgba(58,123,213,0.45)'  : 'rgba(170,130,220,0.4)';
+    const editFill    = isWord ? 'rgba(58,123,213,0.30)'  : 'rgba(170,130,220,0.28)';
     const fontSize    = Math.round(Math.max(11, Math.min(24, rowH * 0.45)) * fontScaleRef.current);
     const font        = isWord ? `500 ${fontSize}px Inter,sans-serif` : `${Math.max(10, fontSize - 1)}px 'JetBrains Mono',monospace`;
     const hoverEdge   = hoverEdgeRef.current;
@@ -1157,12 +1229,15 @@ export default function App() {
       const isSelected = inEdit && selTiles.has(item.id);
       const hasScore = isWord && item.score != null;
       const isEdited   = isWord && item.edited;
-      const fill   = isSelected ? (isWord ? 'rgba(58,123,213,0.55)' : 'rgba(60,200,130,0.50)')
-                   : isEdited   ? (inEdit ? 'rgba(135,206,250,0.40)' : 'rgba(135,206,250,0.28)')
+      const isPerfectScore = hasScore && item.score === 1;
+      const fill   = isSelected ? (isWord ? 'rgba(58,123,213,0.55)' : 'rgba(170,130,220,0.50)')
+                   : isEdited   ? `rgba(${EDITED_GREEN.join(',')},${inEdit ? 0.40 : 0.28})`
+                   : isPerfectScore ? `rgba(${SCORE_ONE_GREEN.join(',')},${inEdit ? 0.40 : 0.28})`
                    : hasScore   ? scoreColor(item.score, inEdit ? 0.40 : 0.28)
                    :              (inEdit ? editFill : fillColor);
-      const stroke = isSelected ? (isWord ? '#7aacf0' : '#60e8a0')
-                   : isEdited   ? '#87cefa'
+      const stroke = isSelected ? (isWord ? '#7aacf0' : '#aa82dc')
+                   : isEdited   ? `rgb(${EDITED_GREEN.join(',')})`
+                   : isPerfectScore ? `rgb(${SCORE_ONE_GREEN.join(',')})`
                    : hasScore   ? scoreColor(item.score, 0.75)
                    :              strokeColor;
       ctx.fillStyle = fill;
@@ -1200,7 +1275,9 @@ export default function App() {
     const isLight = themeRef.current === 'light';
     ctx.fillStyle = isLight ? '#ffffff' : '#0c0c0f'; ctx.fillRect(0, 0, w, h);
     for (const wd of wordsRef.current) {
-      ctx.fillStyle = wd.score != null ? scoreColor(wd.score, 0.55) : 'rgba(58,123,213,0.3)';
+      ctx.fillStyle = wd.edited ? `rgba(${EDITED_GREEN.join(',')},0.55)`
+                    : wd.score === 1 ? `rgba(${SCORE_ONE_GREEN.join(',')},0.55)`
+                    : wd.score != null ? scoreColor(wd.score, 0.55) : 'rgba(58,123,213,0.3)';
       ctx.fillRect((wd.t0 / DUR) * w, 3, Math.max(1, ((wd.t1 - wd.t0) / DUR) * w), h - 6);
     }
     const vx0 = (t0 / DUR) * w, vx1 = (t1 / DUR) * w;
@@ -2822,7 +2899,7 @@ export default function App() {
         menuItem('Validate word', () => {
           pushUndo();
           const updated = itemsRef.current.map(it =>
-            it.id === item.id ? { ...it, edited: true, score: 1 } : it
+            it.id === item.id ? { ...it, edited: true, score: 2, originalText: it.originalText ?? it.text } : it
           );
           commitItems(updated);
           redraw();
