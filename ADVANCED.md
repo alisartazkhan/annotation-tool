@@ -9,14 +9,12 @@ The advanced audio annotation tools: spectrogram, formants, confidence scores, a
 Controls appear stacked on the right side of the spectrogram tier:
 
 - **Colormap selector** — switch between `jet`, `inferno`, `viridis`, and `greys`.
-- **Enhance Spectrogram** — recomputes the spectrogram for the current view using Python/librosa at full canvas resolution. Click **⚙** to expand settings:
-  - **Mel bands** — 40 / 80 / 128 / 160 (default 128)
-  - **FFT size** — 256 / 512 / 1024 / 2048 (default 512)
-- **Generate Formants** — overlays F1/F2/F3 formant tracks computed by Praat's Burg algorithm (via `parselmouth`). Includes an on/off pill toggle to show or hide the overlay without recomputing.
+- **↻ Force Refresh** — the spectrogram auto-renders at high resolution as you scroll/zoom; this button forces an immediate recompute of the current view instead of waiting for the automatic background refresh. There are no manual tuning settings (no mel-bands/FFT-size dropdown) — window size, FFT size, and dB range are fixed to match Audacity's own Spectrogram Settings defaults.
+- **Generate Formants** — overlays F1/F2/F3 formant tracks (Praat-style scatter dots) computed by Praat's Burg algorithm (via `parselmouth`). Four toggle buttons — **F1**, **F2**, **F3**, **All** — independently show or hide each formant's dots without recomputing.
 
-> **Note:** Enhance Spectrogram and Generate Formants require the `aligner` conda environment to be present (it is created by `setup.sh`). The Vite dev server (`npm run dev`) shells out to `dsp_server.py` in the `aligner` env for these features. They are not available in production builds.
+> **Note:** Force Refresh and Generate Formants require the `aligner` conda environment to be present (it is created by `setup.sh`). The Vite dev server (`npm run dev`) shells out to a persistent `dsp_server.py` worker in the `aligner` env for these features. They are not available in production builds.
 
-**Long audio (> 10 min):** the base spectrogram is not computed on load to avoid blocking the browser. The spectrogram area shows a placeholder — click **Enhance Spectrogram** to generate it for the current view. For audio over 30 minutes, a warning banner appears reminding you to save frequently (`Ctrl/Cmd+S`), as the browser holds the full decoded audio in memory.
+**Long audio (> 10 min):** the base spectrogram is not computed on load to avoid blocking the browser. The spectrogram area shows a placeholder — click **↻ Force Refresh** to generate it for the current view. For audio over 30 minutes, a warning banner appears reminding you to save frequently (`Ctrl/Cmd+S`), as the browser holds the full decoded audio in memory.
 
 ---
 
@@ -37,7 +35,7 @@ Click **◎ Scores** in the toolbar to open the Confidence Dashboard, which show
 
 ## In-browser MFA re-alignment
 
-The **⚙ Run MFA** button re-runs forced phoneme alignment on a selected region without leaving the browser. It requires the MFA Flask server running alongside the frontend.
+The **⚙ MFA** button re-runs forced phoneme alignment on a selected region without leaving the browser. It requires the MFA Flask server running alongside the frontend.
 
 Start the server **in a separate terminal** before using this feature:
 
@@ -56,7 +54,7 @@ INFO    Dictionary     : english_us_arpa
 The server loads the alignment model once (~16 s startup), then handles each request in 1–4 s.
 
 **To use it:**
-1. Click **⚙ Run MFA** — if multiple words overlap the selection you'll be asked to confirm which to align
+1. Click **⚙ MFA** — if multiple words overlap the selection you'll be asked to pick one word to align, or align all of them together
 2. When the job completes, phone boundaries are merged into the PHN tier
 
 Up to 4 alignment jobs can be queued at once. A dropdown badge on the button shows queue status. If a word is out-of-vocabulary, the server automatically substitutes the closest dictionary match and shows an orange warning toast.

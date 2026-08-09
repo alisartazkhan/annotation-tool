@@ -1,31 +1,33 @@
 # Annotation Tool — Developer Handoff
 
-A browser-based audio annotation viewer and editor for Praat TextGrid files. Built with React + Vite. No backend except an optional MFA Flask server (`mfa_server.py`) on port 5050. All computation runs on the main thread or in Web Workers.
+A browser-based audio annotation viewer and editor for Praat TextGrid files. Built with React + Vite. Browser-side work runs on the main thread or in Web Workers; in development, Vite also manages a persistent Python DSP worker (`dsp_server.py`) for spectrograms/formants and exposes file-list/save middleware. In-browser re-alignment additionally uses the optional MFA Flask server (`mfa_server.py`) on port 5050.
 
 ---
 
 ## Quick Start
 
 ```bash
-# One-time setup (from code/ directory)
+# One-time setup (from the annotation-tool repository root)
 bash setup.sh
 
 # Then start the annotation tool
-cd code/frontend-reactjs
+cd frontend-reactjs
 npm run dev        # http://localhost:5173
 npm run build      # production output → dist/
 ```
 
-`setup.sh` creates three conda environments (`aligner`, `whisperx`, `nemo`), downloads the MFA English US ARPAbet models, and installs frontend Node dependencies.
+`setup.sh` creates `aligner` and a platform-appropriate `whisperx` environment, downloads the MFA English US ARPAbet models, and installs frontend Node dependencies. On Linux it also creates the `nemo` environment; Parakeet/NeMo is skipped on macOS because it requires Linux + NVIDIA CUDA.
+
+To generate an initial TextGrid before opening the viewer, run `bash asr/run_whisper.sh /path/to/audio.wav` (or `run_parakeet.sh` on Linux/CUDA). See the root `TRANSCRIPTION.md` for the full ASR workflow.
 
 On startup the app scans `public/` via a Vite dev-server middleware (`/api/public-files`):
-- **Exactly one `.wav` + one `.TextGrid`** — auto-loaded immediately.
+- **Exactly one `.wav` + zero or one `.TextGrid`** — auto-loaded immediately; the TextGrid is optional.
 - **Multiple `.wav` or `.TextGrid` files** — a `FilePicker` modal appears; the user selects which pair to open.
 - **No `.wav`** — a setup error screen is shown.
 
 Drop your own files onto the page, or use the Load buttons in the toolbar to load files at any time.
 
-IPA key layout is read from `public/ipa_keys.json` — a JSON object mapping IPA symbol strings to example-word strings (with `**bold**` markup for the key sound). Edit that file to add/remove keys from the virtual keyboard.
+IPA key layout is read from `public/ipa_keys.json` — a JSON object mapping IPA symbol strings to example-word strings (with `**bold**` markup for the key sound). This asset is expected at runtime but is not currently checked into `public/`; add it locally to enable the virtual keyboard.
 
 ---
 
@@ -49,9 +51,9 @@ dsp_server.py         Python DSP script: librosa linear-frequency STFT spectrogr
                       as a one-shot CLI for debugging); requires conda env "aligner"
 
 public/
-  *.wav               Audio file (exactly one expected)
-  *.TextGrid          Annotation file (exactly one expected)
-  ipa_keys.json       IPA virtual keyboard keys: { "symbol": "example with **bold**" }
+  *.wav               Audio files (one auto-loads; multiple open FilePicker)
+  *.TextGrid          Optional annotation files (one auto-loads; multiple open FilePicker)
+  ipa_keys.json       Expected local IPA key map; currently not checked in
 ```
 
 ---
@@ -328,7 +330,7 @@ so it should persist across loads within a session.
 
 The toolbar previously had a unified Edit button split into two clickable zones — a left half that toggled edit mode and a right half that showed the current hotkey and let you rebind it to any key. It was removed (2026-07) to reduce toolbar crowding: edit mode is default-on and rarely needs toggling, and the rebind feature added a second control for a rarely-changed setting.
 
-The JSX (`.btn-edit-split` / `__main` / `__divider` / `__badge` / `__capture`), the `editShortcut`/`editingShortcut` state, `editShortcutRef`, and the corresponding CSS rules in `index.css` were fully deleted (2026-07-25) as part of a dead-code audit — check git history (search "Split edit button") if this UI ever needs to be restored.
+The JSX and the `editShortcut`/`editingShortcut` state plus `editShortcutRef` were deleted (2026-07-25) as part of a dead-code audit. Some legacy `.btn-edit-split*` selectors still remain in `index.css`; they are unused by the current JSX and can be removed in a future CSS cleanup. Check git history (search "Split edit button") if this UI ever needs to be restored.
 
 The hotkey is now **hardcoded to `1`** in the keydown handler (no longer configurable): it matches against `e.code`, `e.key`, and the numpad alias (`Numpad1`), so numpad `1` also fires edit mode regardless of NumLock state.
 
@@ -361,8 +363,7 @@ The tier canvases in edit mode (`addTierEditInteraction`) also support dragging 
 
 **Committing edits**: use `commitTierItems(tierId, updated)` inside this function.
 
-**Undo/Redo**: `pushUndo()` snapshots words + phones + customTiers (max 100) onto `undoStackRef` and clears `redoStackRef`. Ctrl/Cmd+Z fires `popUndo()` (pushes current state to `redoStackRef`, restores previous) + `redraw()`. Ctrl/Cmd+Y (or Ctrl/Cmd+Shift+Z) fires `popRedo()`. Two `useState` counters, `undoCount`/`redoCount`, mirror the ref stack lengths so the toolbar Undo/Redo buttons re-render and grey out when their stack is empty (refs alone don't trigger re-renders).
-**Undo**: `pushUndo()` snapshots words + phones + customTiers (max 100). Ctrl/Cmd+Z fires `popUndo()` + `redraw()`. **Redo**: Ctrl/Cmd+Y fires `popRedo()` + `redraw()`. Both toolbar buttons are icon-only (`↶` / `↷`), with the `.btn-undo-redo` class bumping their font-size to 20px so the arrow glyphs read larger than surrounding text-label buttons — see [Keyboard Shortcuts](#keyboard-shortcuts).
+**Undo/Redo**: `pushUndo()` snapshots words + phones + customTiers (max 100) onto `undoStackRef` and clears `redoStackRef`. Ctrl/Cmd+Z fires `popUndo()` (pushes current state to `redoStackRef`, restores previous) + `redraw()`; Ctrl/Cmd+Y fires `popRedo()`. Ctrl/Cmd+Shift+Z is not implemented. Two `useState` counters, `undoCount`/`redoCount`, mirror the ref stack lengths so the toolbar buttons re-render and grey out when their stack is empty (refs alone do not trigger re-renders). Both buttons are icon-only (`↶` / `↷`), with `.btn-undo-redo` setting `font-size: 20px`.
 
 **Double-click empty** → creates tile, opens label editor.  
 **Double-click tile** → opens inline label editor.  
@@ -402,14 +403,6 @@ A 24px bar used to appear between the tiers and the minimap whenever edit mode w
 
 ## Tile Selection & Multi-Select
 
-## Copy/Paste Word Labels
-
-`labelClipboardRef = useRef(null)` holds the last copied label string (in-app only, not the OS clipboard).
-
-- **Ctrl/Cmd+C** — copies the label `text` of the currently selected tile into `labelClipboardRef`.
-- **Ctrl/Cmd+V** — writes that label onto **every** tile in the current multi-selection via `commitTierItems`, marking each `edited: true` (so they recolor dark green and get `score: 2`). Undoable as a single `pushUndo()` snapshot.
-
-Useful for repeated words/phonemes — select many tiles, paste once.
 ### Selection state
 
 ```js
@@ -431,28 +424,39 @@ clearSelection()     // clears ref + both states
 
 Tile selection works in **both edit and non-edit mode**. In non-edit mode clicking a tile selects it and sets the play region — drag, rename, delete, and multi-select are edit-mode only.
 
-`selectionAnchorRef = useRef(null)` stores the anchor tile for range selection. Shift+click and Ctrl/Cmd+click both compute the inclusive range of tiles (by `t0` order within the tier) between the anchor and the target; Ctrl/Cmd+click also updates the range live on `mousemove` while the button is held.
+`selectionAnchorRef = useRef(null)` stores the most recently plain-clicked, Shift-clicked, or Ctrl/Cmd-clicked tile. It is used only by Shift+click range selection. A range is always computed within one tier, in `t0` order; selections from other tiers are preserved.
 
 | Action | Mode | Result |
 |---|---|---|
-| **Plain click** a tile (not in a group) | Either | Selects tile; sets `selectionRef` to tile's `[t0, t1]`; moves playhead to `t0` |
+| **Plain click** a tile (not in a group) | Either | Exclusive select: clears prior selection, selects this tile; sets `selectionRef` to tile's `[t0, t1]`; moves playhead to `t0` |
 | **Plain click** empty space | Either | Clears tile selection and `selectionRef`; seeks playhead |
-| **Ctrl/Cmd+click** a tile | Edit only | Toggles it into/out of the multi-selection; no drag starts |
-| **Shift+click** a tile | Edit only | Selects every tile between the anchor and the clicked tile (range select) |
-| **Ctrl/Cmd+click + drag** | Edit only | Anchors on press, live-selects the range under the drag until release |
+| **Ctrl/Cmd+click** a tile | Edit only | Toggles it into/out of the multi-selection **without** clearing other tiles; does **not** update `selectionRef` / playhead; does not start a tile/group move |
+| **Shift+click** a tile | Edit only | Replaces this tier's selected tiles with the inclusive range from its anchor to the clicked tile; selections in other tiers remain selected; does **not** update `selectionRef` / playhead |
+| **Ctrl/Cmd+click + drag** | Edit only | Toggles the pressed tile, then adds each newly touched tile in that same tier until release |
 | **Plain click** a tile in a multi-selection | Edit only | Keeps group, starts group drag |
-| **Plain click + no drag** on grouped tile | Edit only | Collapses to single selection on mouseup (detected via `didDrag` flag) |
+| **Plain click + no drag** on grouped tile | Edit only | Collapses to single selection on mouseup (detected via `didDrag` flag); then sets `selectionRef` / playhead for that tile |
 | **Leave edit mode** | — | Clears entire selection |
 
-Clicking a tile sets `selectionRef.current = { t0: item.t0, t1: item.t1 }`. Play/Space then replays from `sel.t0` to `sel.t1`. Clicking empty space clears `selectionRef`; Play/Space resumes from `playheadRef.current`.
+**Plain click vs Ctrl/Cmd+click:** a plain click is exclusive and drives playback (`selectionRef` + playhead). Ctrl/Cmd+click only mutates `selectedTilesRef` (additive multi-select) and leaves the play region alone. Shift+click is also selection-map-only. Play/Space uses `selectionRef` when set; otherwise it resumes from `playheadRef.current`. Clicking empty space clears `selectionRef`.
 
 **AUTO-PLAY checkbox** (right side of the SHOW bar): when enabled, clicking a tile immediately starts playback from its onset to offset without requiring a separate Play press.
 
+### Cross-tier selection
+
+Cross-tier selection is additive and works for words, phones, and custom tiers:
+
+- **Ctrl/Cmd+click** toggles any individual tile in or out without clearing selected tiles in other tiers. This is the direct way to build an arbitrary cross-tier group. It does not replace the whole selection the way a plain click does, and it does not update the play region.
+- **Shift+click** builds a contiguous range in the current tier. If `selectionAnchorRef` belongs to that tier, the current tier's old selection is replaced by the inclusive range between anchor and target, sorted by `t0`. If the anchor belongs to another tier (or is missing), the clicked tile becomes the new anchor and the new one-tile range for this tier. In both cases, selections in every other tier are retained. Like Ctrl/Cmd+click, it does not update `selectionRef` / playhead.
+- **Ctrl/Cmd+drag** can add multiple tiles from the tier where the drag began. The initially pressed tile is toggled; each newly touched tile is then added once. It does not sweep across tier canvases.
+- Modifier-based selection changes `selectedTilesRef` only. `selectionRef` and the playhead are updated by a plain tile click (or by collapsing a group with a plain click + no drag).
+
+The resulting `selectedTilesRef` map can contain entries from any number of tiers. Group drag, copy/paste, and Delete/Backspace all iterate that map by `tierId`, so they operate on the full cross-tier group. A plain click on a selected group member starts a group drag; releasing without moving collapses the group to that one tile.
+
+**Implementation invariant:** Shift+click may clear only entries whose `entry.tierId === tierId`. Clearing the whole map there would regress additive cross-tier ranges. Ctrl/Cmd+click must remain a direct map toggle and must not be converted back to same-tier range selection.
+
 ### Visual feedback
 
-- Selected tiles draw with a brighter fill + coloured stroke at 2px:
-  - Words: `#7aacf0` (blue)
-  - Phones / custom: `#60e8a0` (green)
+- In edit mode, selected tiles keep their existing hue (score / edited / default tier chrome) and only “pop”: higher fill alpha (~0.55) + a full-opacity stroke at 2px. Selection no longer swaps words to accent blue or phones to a separate purple highlight. In non-edit mode, clicking a tile still sets the play region and tier outline, but `drawTier` does not apply selected-tile fill/stroke.
 - The `.tier` div for any tier containing a selected tile gets an `outline`:
   - Words: `rgba(58,123,213,0.7)`
   - Phones / custom: `rgba(60,200,130,0.7)`
@@ -466,7 +470,7 @@ When dragging a tile that is part of a multi-selection (≥2 tiles):
 2. Computes `groupOrigT0` (leftmost t0) and `groupOrigT1` (rightmost t1) — treated as a single virtual tile for snapping
 3. Computes `minDt` / `maxDt` clamps so no tile crosses `0` or `duration`
 4. On each `mousemove`, snaps the group's leading/trailing edge to external boundaries, then applies the same `dt` to all selected tiles across all tiers
-5. Each affected tier canvas is redrawn independently during the drag
+5. Commits each affected tier through `commitTierItems`, then performs a full `redraw()` so all canvases and drag guides remain synchronized
 6. On `mouseup` without drag (`didDrag === false`): collapses selection to just the clicked tile; sets `selectionRef` and moves playhead to that tile's onset
 
 Edge dragging is always single-tile only.
@@ -514,8 +518,8 @@ Three dev-only endpoints are registered:
 // 1. VITE_PYTHON env var  (e.g. VITE_PYTHON=/custom/python npm run dev)
 // 2. `conda run -n aligner which python`  (works for any conda install location)
 // 3. Falls back to plain `python` and lets the OS PATH decide
-function resolveAlignerPython() { ... }
-const PYTHON = resolveAlignerPython();
+function resolveAlginerPython() { ... } // current identifier contains this typo
+const PYTHON = resolveAlginerPython();
 ```
 
 On startup, Vite prints `[vite] Using Python: /path/to/aligner/bin/python` so users can confirm it resolved correctly.
@@ -534,7 +538,12 @@ server.middlewares.use('/api/save-textgrid', (req, res) => {
 ```js
 const saveTextGrid = useCallback(async () => {
   const filename = tgFileNameRef.current + '.TextGrid';
-  const content  = serializeTextGrid(duration, words, phones, customTiers);
+  const content  = serializeTextGrid(
+    durationRef.current,
+    wordsRef.current,
+    phonesRef.current,
+    customTiersRef.current,
+  );
   setSaveState('saving');
   const res = await fetch('/api/save-textgrid', { method: 'POST', body: JSON.stringify({ filename, content }) });
   setSaveState(json.ok ? 'saved' : 'error');
@@ -575,7 +584,7 @@ const savedTextGridRef       = useRef(null);  // serialized baseline after load 
 
 ### Data format
 
-`public/ipa_keys.json` is a JSON **object** (not an array) mapping each IPA symbol to an example word string:
+`public/ipa_keys.json` is expected to be a JSON **object** (not an array) mapping each IPA symbol to an example word string. The current repository does not ship this file, so create/copy it into `public/` to enable the keyboard:
 
 ```json
 {
@@ -637,10 +646,7 @@ const [mfaWarning, setMfaWarning] = useState(null);  // OOV substitution warning
 - `processNextMfaJob()` picks the next `'pending'` job, marks it `'running'`, runs it, then recursively calls itself.
 - The MFA button label shows `⟳ <word> <t0>–<t1>s` when a job is active. A badge shows queue depth with a dropdown listing all pending/running/errored jobs.
 - Errors appear as a red fixed pill (bottom-right, max 380px wide).
-- OOV substitution warnings appear as an **orange** fixed pill above the error pill:
-  ```js
-  background: '#221a08', border: '1px solid #a07020', color: '#f0b840'
-  ```
+- OOV substitution warnings appear as an orange fixed pill above the error pill via the theme-aware `.toast.toast--warn` CSS classes.
 
 ### mfaWorker.js
 
@@ -660,7 +666,7 @@ self.postMessage({
 
 ### Alignment failure handling
 
-When the aligner raises an `AlignerError` (e.g. audio too short/quiet, or the words can't be aligned to the audio), the server catches it and returns **HTTP 422** with a readable JSON message instead of a raw 500 stack trace. Detected by matching `'AlignerError'`, `'could not align'`, or `'beam'` in the exception text. The frontend shows this as the red error pill.
+The server returns **400** for missing inputs or audio shorter than 50 ms. It returns **422** only for the explicit dictionary/no-usable-phone failure branch. Other alignment exceptions, including Kalpy/MFA failures, currently fall through the generic `except Exception` handler and return **500** with `{ error: str(exc) }`. The frontend shows any non-OK result in the red error pill.
 
 ### Model and dictionary
 
@@ -676,7 +682,7 @@ MFA_ACOUSTIC_MODEL=french_mfa MFA_DICTIONARY=french_mfa python mfa_server.py
 
 ### Persistent aligner (key performance detail)
 
-The aligner is loaded **once at startup** (~16 s) and reused for every request (~1–4 s per alignment). Do **not** use subprocess (`mfa align …`) — that cold-starts the full FST every call (~60 s).
+The aligner is loaded **once at startup** (~15 s) and reused for every request (~1–4 s per alignment). Do **not** use subprocess (`mfa align …`) — that cold-starts the full FST every call (~60 s).
 
 ### ARPAbet → IPA conversion
 
@@ -701,7 +707,7 @@ Three-tier cache, checked in priority order by `drawSpec` via simple containment
 | Cache | Ref | Coverage | How computed |
 |---|---|---|---|
 | Local (sharp) | `spectroCacheRef` | Rolling ~3x-viewport buffer around the current view | `fetchEnhancedSpec` — Python/librosa via `/api/compute-dsp`, pixel width scaled to match the canvas's actual pixel density. Auto-prefetches as you scroll/zoom — see below. |
-| Overview | `overviewCacheRef` (`Map`, keyed by chunk index) | Fixed `OVERVIEW_CHUNK_SEC` (300s) chunks of the file | `fetchOverviewChunk` — Python/librosa via `/api/compute-dsp`, **fixed** `OVERVIEW_PW=1800` pixel width regardless of chunk length, so payload stays bounded (~13–14MB) no matter how long the chunk/file is. Only the chunk containing the *initial* view auto-fetches on load; other chunks only fetch when "↻ Force Refresh" is clicked while viewing them. |
+| Overview | `overviewCacheRef` (`Map`, keyed by chunk index) | Fixed `OVERVIEW_CHUNK_SEC` (300s) chunks of the file | `fetchOverviewChunk` — Python/librosa via `/api/compute-dsp`, **fixed** `OVERVIEW_PW=1800` pixel width regardless of chunk length, so payload stays bounded (~13–14MB) no matter how long the chunk/file is. The current view's chunk auto-fetches during navigation via `scheduleSpecPrefetch`; Force Refresh can also backfill it immediately. |
 | Base | `baseSpecCacheRef` | Full audio duration | `calcBaseSpec` — JS worker (`specWorker.js`), fixed N_FFT=2048/hop=512, mel-binned. Skipped for audio > 10 min. Legacy fallback, unchanged by this rewrite. |
 
 ### Analysis parameters (matches Audacity's own Spectrogram Settings defaults)
@@ -728,13 +734,13 @@ Every `/api/compute-dsp` request decodes only a small padded region of the WAV a
 - Gated by `specFetchInFlightRef`, which holds a `performance.now()` timestamp (not a bare boolean) while a `fetchEnhancedSpec` call is outstanding, `null` otherwise. `scheduleSpecPrefetch` proceeds if it's `null` **or** it's been set for longer than `SPEC_INFLIGHT_WATCHDOG_MS` (`SPEC_FETCH_TIMEOUT_MS * 2`) — see the fixed bug below for why the watchdog exists.
 
 **Fixed 2026-07-24 — sharp tier could get stuck on the coarse overview/base fallback forever.** Previously documented here as an unresolved bug: the sharp tier would sometimes stay on the coarser fallback persistently (not just a sub-second gap) after navigating to a new part of the timeline, with no self-healing even after several seconds. Root-caused to: `specFetchInFlightRef` was a plain boolean set `true` at the start of `fetchEnhancedSpec` and reset to `false` in **exactly one place** — that function's own `finally` block. Neither the frontend `fetch('/api/compute-dsp')` call nor the backend `execFile` call to `dsp_server.py` had any timeout, so if a request ever hung (plausible: `dsp_server.py` pays a real, variable cold-subprocess interpreter/import cost per call, with no concurrency cap in the Vite middleware to bound contention from overlapping sharp/overview/formant requests), its `finally` would never run, `specFetchInFlightRef` would stay `true` for the rest of the session, and `scheduleSpecPrefetch`'s very first line (`if (specFetchInFlightRef.current) return;`) would then silently drop every future automatic prefetch attempt — including the `SPEC_PREFETCH_MAX_WAIT_MS` escape hatch that's specifically supposed to guarantee eventual refresh, since that logic sat behind the same gate. Fixed with three changes, all still present as of this writing:
-1. `vite.config.js` now bounds every request to `DSP_TIMEOUT_MS` (15s) so a hung/slow `dsp_server.py` response resolves as an error instead of hanging forever. Originally implemented via `execFile`'s built-in `timeout` option; when `dsp_server.py` moved to a persistent `--serve` worker (see [Persistent worker](#persistent-worker-latency) below), `execFile` was replaced by `spawn`, which has no per-call timeout equivalent — `runDsp()`'s own `setTimeout(..., DSP_TIMEOUT_MS)` per request took over the same guarantee.
-2. `fetchEnhancedSpec`/`fetchOverviewChunk`'s `fetch()` calls now pass `signal: AbortSignal.timeout(SPEC_FETCH_TIMEOUT_MS)` (20s) as an independent frontend-side backstop.
+1. `vite.config.js` now bounds every worker request to `DSP_TIMEOUT_MS` (60s) so a hung/slow `dsp_server.py` response eventually resolves as an error instead of hanging forever. Originally implemented via `execFile`'s built-in `timeout` option; when `dsp_server.py` moved to a persistent `--serve` worker (see [Persistent worker](#persistent-worker-latency) below), `execFile` was replaced by `spawn`, which has no per-call timeout equivalent — `runDsp()`'s own `setTimeout(..., DSP_TIMEOUT_MS)` per request took over the same guarantee.
+2. `fetchEnhancedSpec`/`fetchOverviewChunk`'s `fetch()` calls pass `signal: AbortSignal.timeout(SPEC_FETCH_TIMEOUT_MS)` (20s), so normal spec requests abort client-side before the 60s worker timeout. `calcFormantForView` currently has no equivalent fetch timeout.
 3. `specFetchInFlightRef` (and `fetchOverviewChunk`'s `{ pending }` placeholder) now store a timestamp instead of a bare boolean, so `scheduleSpecPrefetch`/`fetchOverviewChunk` can route around a marker that's been set for implausibly long (`SPEC_INFLIGHT_WATCHDOG_MS`) rather than trusting it forever — defense in depth in case a future change reintroduces an unbounded path.
 
 ### Manual "Force Refresh"
 
-`calcSpecForView` — button handler, relabeled from the old "⟳ Enhance Spectrogram" (now "↻ Force Refresh"). Bypasses the debounce: calls `fetchEnhancedSpec(computePaddedWindow(t0,t1), {manual: true})` directly, and also backfills the current view's overview chunk via `fetchOverviewChunk` if missing — the only way overview chunks beyond the initial one ever get fetched for files longer than `OVERVIEW_CHUNK_SEC`.
+`calcSpecForView` — button handler, relabeled from the old "⟳ Enhance Spectrogram" (now "↻ Force Refresh"). Bypasses the debounce: calls `fetchEnhancedSpec(computePaddedWindow(t0,t1), {manual: true})` directly, and also backfills the current view's overview chunk via `fetchOverviewChunk` if missing. Normal navigation also fetches overview chunks through `scheduleSpecPrefetch`; this button forces the work immediately.
 
 `calcFormantForView` (the separate "Generate Formants" button) intentionally does **not** touch `spectroCacheRef` — it discards the spectrogram data in its response so it can't clobber a wider prefetched buffer with an unpadded strip.
 
@@ -797,7 +803,7 @@ Drawn directly on the spectrogram canvas at the end of `drawSpec` (not a separat
 
 Formants are computed by `dsp_server.py` using `parselmouth` (Python bindings for Praat). The Praat Burg algorithm (`To Formant (burg)`) with a 5500 Hz ceiling is the same algorithm Praat itself uses, giving linguistically correct F1/F2/F3 values.
 
-Triggered by "Generate Formants" button → `calcFormantForView` → `/api/compute-dsp` → returns `formants` alongside the spectrogram. Both are updated together in one request.
+Triggered by "Generate Formants" button → `calcFormantForView` → `/api/compute-dsp` with `kind: 'formants'`. The response contains formants only (`spec` is `null`), and the existing spectrogram cache is intentionally left untouched.
 
 ### Analysis window: padding + fixed-grid quantization (2026-07-26/27)
 
@@ -812,9 +818,9 @@ Triggered by "Generate Formants" button → `calcFormantForView` → `/api/compu
 
 ```js
 formantTrackRef.current = {
-  f1: Float32Array,   // Hz per frame (0 = unvoiced/silence)
-  f2: Float32Array,
-  f3: Float32Array,
+  f1: number[],       // Hz per frame (0 = unvoiced/silence)
+  f2: number[],
+  f3: number[],
   times: number[],    // absolute time in seconds for each frame
   regionT0: number,   // start time of the computed region
   sr: number,
@@ -855,7 +861,6 @@ const QUANTUM = 128 / sr;
 const nextQuantumCtx = Math.ceil(ctxNow / QUANTUM) * QUANTUM;  // when audio actually starts
 const perfOffset = (nextQuantumCtx - ctxNow) * 1000;           // ms until that quantum
 playStartPerfRef.current = performance.now() + perfOffset;      // perf anchor
-playStartCtxRef.current  = nextQuantumCtx;
 
 src.start(0, from);
 src.stop(nextQuantumCtx + audioDur);
@@ -915,16 +920,16 @@ Each time the loop restarts (same `onended` branch above), a toast pops up top-c
 
 ## Confidence Score Coloring
 
-Word tiles colored by `item.score` via `scoreColor(score, alpha)`. Scores ≤ 0.5 render as a red→yellow ramp (unchanged); scores > 0.5 additionally blend progressively toward white (up to 45% at score 1.0) so the high-confidence end stays light/legible in dark mode instead of reading as near-black:
+Word tiles are normally colored by `item.score` via `scoreColor(score, alpha)`. Scores ≤ 0.5 render as a red→yellow ramp; scores > 0.5 blend progressively toward white (up to 45% at score 1.0):
 - 0.0 → red `rgb(255, 0, 50)`
 - 0.5 → yellow `rgb(255, 200, 50)`
-- 1.0 → light green `rgb(115, 225, 142)`
+- `scoreColor(1)` → light green `rgb(115, 225, 142)` (used by the dashboard legend)
 
-Items without a score fall back to blue (words) or green (phonemes). The dashboard's legend gradient (see below) calls `scoreColor(0)`/`scoreColor(0.5)`/`scoreColor(1)` directly rather than hardcoding these values, so it always stays in sync with the function.
+On the tier canvas and minimap, an **exact** `score === 1` is special-cased to `SCORE_ONE_GREEN = rgb(0, 200, 50)` instead of using the lightened end of `scoreColor`. Items without a score fall back to blue (words) or purple (phonemes/custom). The dashboard legend calls `scoreColor(0)`/`scoreColor(0.5)`/`scoreColor(1)` directly, so its 1.0 endpoint is the light green above rather than `SCORE_ONE_GREEN`.
 
 ### Edited word rendering
 
-Words with `edited: true` render in a fixed green — `EDITED_GREEN = rgb(0, 200, 50)` (stroke `rgb(0,200,50)` / fill `rgba(0,200,50,…)`) — on the tier canvas and minimap, regardless of their score value. This is deliberately the *old* (pre-lightening) max-confidence green — darker than the current `scoreColor(1)` output above, so edited tiles remain visually distinct from real high-confidence tiles, while no longer being so dark it looks black in dark mode (the old value was `#005000`/`rgba(0,80,0,…)`). In `drawTier`, the `isEdited` check takes priority over `hasScore` in the fill/stroke logic, so `EDITED_GREEN` always wins for edited words.
+Words with `edited: true` render in a fixed teal — `EDITED_GREEN = rgb(0, 169, 165)` (`#00A9A5`) — on the tier canvas and minimap, regardless of their score value. In `drawTier`, the `isEdited` check takes priority over perfect-score and general score coloring, so the edited teal always wins.
 
 ### Score assignment for edited and new words
 
@@ -943,15 +948,13 @@ Note: the tile color and the dashboard exclusion are independent — `drawTier`/
 
 ### Edited words list
 
-Below the lowest-confidence list, `EditedWordsList` renders every word with `edited: true`, showing what the word was before and what it was changed to — e.g. `~~teh~~ → the` (original struck through, next to the current text in `EDITED_GREEN`). Words with no meaningful text change are labeled `new word` (`originalText === ''`) or `validated (no change)` (originalText missing or equal to the current text, e.g. via "Validate word" below) instead of a before/after pair.
+Below the lowest-confidence list, `EditedWordsList` renders every word with `edited: true`, showing what the word was before and what it was changed to — e.g. `~~teh~~ → the` (original struck through, next to the current text in `EDITED_GREEN`). Words with no meaningful text change are labeled `new word` (`originalText === ''` or missing) or `validated` (`originalText` equals the current text) instead of a before/after pair.
 
-### Persistence — edited state survives save/reload
+### Persistence — edited state survives full-format save/reload
 
-`edited`, `score`, and `originalText` all round-trip through the `.TextGrid` file, following the same custom-field convention:
-- `serializeTextGrid` (App.jsx) writes `edited = true` and `original = "<text>"` as extra lines inside each interval, alongside the existing `score = <value>` line, whenever `it.edited`/`it.originalText` are set. Like `score`, both are omitted when exporting in Praat-compatible mode (`praatCompat`), since Praat doesn't recognize them.
-- `parseTextGrid.js` reads `edited = true|1` and `original = "<text>"` back off each interval (mirroring its existing `score =` parsing) and attaches them to the parsed item as `item.edited`/`item.originalText`.
+`serializeTextGrid` writes `edited = true` and `original = "<text>"` as extra lines inside each interval, alongside `score = <value>`, whenever `it.edited`/`it.originalText` are set. These custom fields are omitted in Praat-compatible export mode.
 
-Because of this, reloading a saved TextGrid restores both the `EDITED_GREEN` tile coloring and the full "Edited words" list (with correct before/after text) exactly as they were before saving.
+`parseTextGrid.js` reads `edited = true|1` and `original = "<text>"` when those custom fields are present, alongside the existing `score` parser. Reloading a full-format TextGrid therefore restores edited teal coloring and the Edited words list. Praat-compatible exports intentionally omit all custom metadata, so that format cannot restore edited state.
 
 ### Validate word (right-click context menu)
 
@@ -962,7 +965,9 @@ if (isWord) {
   menuItem('Validate word', () => {
     pushUndo();
     const updated = itemsRef.current.map(it =>
-      it.id === item.id ? { ...it, edited: true, score: 2 } : it
+      it.id === item.id
+        ? { ...it, edited: true, score: 2, originalText: it.originalText ?? it.text }
+        : it
     );
     commitItems(updated);
     redraw();
@@ -970,7 +975,7 @@ if (isWord) {
 }
 ```
 
-- Sets `edited: true` and `score: 2` directly on the tile, then commits via `commitItems` → `commitTierItems` (undoable). Because the item already carries `edited: true` going in, `commitTierItems`'s own change-detection branch (which would set `originalText`) never fires for it — `originalText` stays unset, so it shows as `validated (no change)` in the Edited words list.
+- Sets `edited: true`, `score: 2`, and `originalText: it.originalText ?? it.text` directly on the tile, then commits via `commitItems` → `commitTierItems` (undoable). An unchanged validated tile therefore has `originalText === text` and is labeled `validated` in the Edited words list.
 - Renders identically to any other edited word — `EDITED_GREEN` fill/stroke (see above), no distinct visual for "validated" vs. "manually edited."
 - Because `score` is forced to `2` and `edited` is `true`, a validated word is excluded from `ConfidenceDashboard`'s stats and histogram like any other edited word.
 - **No keyboard shortcut** and **no double-click trigger** — right-click context menu only, currently.
@@ -988,16 +993,14 @@ if (isWord) {
 | `1` | Toggle edit mode (on by default; not currently rebindable — see [Split Edit Button (removed)](#split-edit-button-removed)) |
 | Ctrl/Cmd+S | Save TextGrid to `public/` (dev only) |
 | Ctrl/Cmd+Z | Undo |
-| Ctrl/Cmd+Y (or Ctrl/Cmd+Shift+Z) | Redo |
-| Ctrl/Cmd+C | Copy selected tile's label |
-| Ctrl/Cmd+V | Paste label onto all selected tiles |
 | Ctrl/Cmd+Y | Redo |
 | Ctrl/Cmd+C | Copy selected tile(s) — single or group, across tiers (edit mode, requires a selection) |
 | Ctrl/Cmd+V | Paste copied tile(s) as new tile(s), anchored at the playhead (edit mode) |
 | ⌫ / Delete | Delete selected tile(s) (edit mode, requires a selection) |
-| Shift+click | Range-select tiles from the last-selected tile to the clicked tile (edit mode) |
-| Ctrl/Cmd+click (or drag) | Same range-select as Shift+click (edit mode); the toggle-selection variant is dead/commented-out code in the tier mousedown handler |
+| Shift+click | Range-select in the current tier (keeps other tiers); does not set the play region (edit mode) |
+| Ctrl/Cmd+click (or drag) | Toggle tiles into/out of a multi-selection across tiers — unlike plain click, does not replace the selection or set the play region; drag adds tiles in the starting tier (edit mode) |
 | Arrow Left/Right | Pan by 20% of view |
+| Arrow Up/Down | Zoom the timeline viewing window in / out (same steps as the ZOOM `−`/`+` buttons) |
 | `+`/`-` (or `=`/`_`, numpad +/-) | Waveform y-zoom, or tile font size if a tier was last clicked — see [Keyboard shortcut context](#keyboard-shortcut-context-waveform-vs-tiles) |
 
 The edit mode hotkey is hardcoded to `1` in the keydown handler. The check matches `e.code`, `e.key`, and the `Numpad1` alias so numpad `1` works regardless of NumLock state.
@@ -1009,10 +1012,6 @@ The edit mode hotkey is hardcoded to `1` in the keydown handler. The check match
 ## CSS
 
 
-Toolbar buttons were enlarged/brightened for readability: `.btn` padding 5px→8px, font-size 12px→13.5px, brighter background (`#2f2f37`) and full-strength text color (`var(--text)` instead of `var(--text-dim)`); `.toolbar` height 44px→54px. `.load-btn` and `.btn-edit-split__main` padding were matched to the new sizing.
-
-
-`index.css` uses CSS custom properties defined in `:root` at the top of the file:
 `index.css` uses CSS custom properties defined in `:root` at the top of the file, expanded considerably by the theming work below:
 
 ```css
@@ -1071,6 +1070,8 @@ These rules are scoped with a `.toolbar` ancestor selector (`.toolbar .btn`, not
 
 **`.zoom-label`** (despite the name) is the shared convention for a small muted inline label placed before a compact toolbar control — used for both `ZOOM` (before the zoom slider) and `Playback speed` (before the playback-rate `<select>`). Prefer it over repeating the label text inside every `<option>` (the old playback-speed dropdown did this — `Playback speed: 1×`, `Playback speed: 1.25×`, etc. — which made the closed `<select>` itself wide and repetitive; the label was pulled out into its own span and the options trimmed to just `1×`, `1.25×`, ...).
 
+The timeline `ZOOM` control has `−`/`+` buttons on either side of the range input. `adjustTimelineZoom(dir)` steps from the **live** view span via `spanToSlider(t1 - t0)` (not stale `zoomValue` state), moves by `TIMELINE_ZOOM_STEP` (2 slider percentage points), clamps to `[0, 100]`, and delegates to `handleZoom`, preserving the same center-anchored logarithmic zoom behavior as dragging the slider. Arrow Up/Down call the same helper (Up = zoom in, Down = zoom out). `.zoom-step-btn` keeps each button compact while inheriting the shared toolbar height; buttons disable at their respective limits.
+
 ### Theming (light/dark mode)
 
 The toolbar, panels, popovers, modals, and toasts support light/dark theming. **The waveform/spectrogram/tier-annotation canvas is a data-visualization surface** (confidence-score gradient, spectrogram colormaps, waveform/tile fill and stroke colors) tuned for a dark background and stays out of scope for almost all of its color logic — with one narrow, deliberate exception (added 2026-07) covering just the plot background fill and tile text color; see "Light-mode plot background/text exception" below.
@@ -1121,7 +1122,7 @@ This must stay in `index.html`, not move into a React effect — React can't run
 
 **Token conventions**: generic surface/text tokens (`--bg-surface`, `--border-surface`, `--bg-tooltip`, `--text-soft`, `--accent-rgb` for `rgba(var(--accent-rgb), alpha)` blends) extend the pre-existing `:root` convention. Semantic brand-color families — `--mfa-*` (green), `--export-*` (green), `--tier-*` (blue), `--warn-*`/`--error-*`/`--save-*` (status colors) — get their **own** light-mode-adjusted values rather than being swept into the generic tokens, since they need to keep their hue meaning in both themes. Literal `#fff`/`#000` is left alone (not tokenized) wherever text is contrast-matched to a *fixed* accent color rather than to the page background (e.g. white text on the always-blue Play button) — correct in both themes by construction.
 
-**Frozen-dark boundary — do not add theme awareness beyond the table above**: `drawPlayheadLine`, `drawSelectionRect`, `drawSpec`, `drawFreqAxis`, `drawOverlay`, and `drawSnapGuide` remain entirely theme-unaware, as do `src/dsp.js`, `src/specWorker.js`, `scoreColor()` and every call site (tile fills, `ConfidenceDashboard`'s stat values/histogram/lowest-confidence rows), and `ConfidenceDashboard`'s hardcoded gradient legend (mirrors the frozen canvas confidence scale). `drawWave`/`drawTier`/`drawMinimap`/`drawScrollbar`/`drawRuler` themselves are *not* fully off-limits anymore — only their background fill (plus `drawTier`'s tile text and `drawMinimap`'s viewport tint) is in scope, per the exception above; every other color decision inside those five functions is still frozen. The colormap→label-color table inside `drawSpec` (jet=black/inferno=white/viridis=white/greys=black) is about legibility against each *spectrogram colormap*, not the app theme — leave it alone too.
+**Frozen-dark boundary — do not add theme awareness beyond the table above**: `drawPlayheadLine`, `drawSelectionRect`, `drawSpec` (including its inline frequency-axis drawing), `drawOverlay`, and `drawSnapGuide` remain entirely theme-unaware, as do `src/dsp.js`, `src/specWorker.js`, `scoreColor()` and every call site (tile fills, `ConfidenceDashboard`'s stat values/histogram/lowest-confidence rows), and `ConfidenceDashboard`'s hardcoded gradient legend (mirrors the frozen canvas confidence scale). `drawWave`/`drawTier`/`drawMinimap`/`drawScrollbar`/`drawRuler` themselves are *not* fully off-limits anymore — only their background fill (plus `drawTier`'s tile text and `drawMinimap`'s viewport tint) is in scope, per the exception above; every other color decision inside those five functions is still frozen. The colormap→label-color table inside `drawSpec` (jet=black/inferno=white/viridis=white/greys=black) is about legibility against each *spectrogram colormap*, not the app theme — leave it alone too.
 
 **In scope despite sitting next to canvases**: `.minimap`/`.scrollbar-strip`/`*-gutter` div backgrounds (these are DOM chrome behind/beside the canvas, not `fillStyle` calls) and the `.formant-card`/`.spec-overlay-btns`/`.calc-spec-btn` floating HUD (DOM elements layered over the spectrogram via `backdrop-filter`, not canvas draw calls) — in light mode these render as a light, translucent card floating over the still-dark spectrogram underneath, which is intentional.
 
@@ -1185,7 +1186,7 @@ This must stay in `index.html`, not move into a React effect — React can't run
 
 - **`popUndo` re-serializes to check dirty state** — it cannot just set `isDirty = false` unconditionally, because undoing a change on top of a previously-unsaved change should keep the indicator on.
 
-- **Do not hardcode the Python path in `vite.config.js`.** Use `resolveAlignerPython()` so the tool works on any machine. Override with `VITE_PYTHON` env var if needed.
+- **Do not hardcode the Python path in `vite.config.js`.** Use the existing resolver (currently misspelled `resolveAlginerPython()`) so the tool works on any machine. Override with `VITE_PYTHON` env var if needed.
 
 - **MFA uses `english_us_arpa`** (200k-word ARPAbet dictionary), not `english_mfa` (42k words).
 
@@ -1197,7 +1198,7 @@ This must stay in `index.html`, not move into a React effect — React can't run
 
 - **Group drag defers selection collapse to `mouseup`** via a `didDrag` boolean. On `mousedown` the group is kept intact so dragging works; if no movement occurred, `onUp` collapses to single selection.
 
-- **`/api/save-textgrid` and `/api/compute-dsp` only exist in dev.** The Vite middleware writes directly to `public/` and shells out to Python. Neither endpoint exists in production builds.
+- **`/api/save-textgrid` and `/api/compute-dsp` only exist in dev.** The Vite middleware writes directly to `public/` and talks to the persistent `dsp_server.py --serve` process over newline-delimited JSON. Neither endpoint exists in production builds.
 
 - **`calcSpecForView` and `calcFormantForView` both require `publicWavFileRef.current` to be set.** This ref is only populated when the wav was auto-loaded from `public/` — it is `null` for any other source. Both functions guard on it and return early if null.
 
@@ -1263,8 +1264,8 @@ See also `CODE_REVIEW_FINDINGS.md` (repo root) — a separate simplification/eff
 2. ~~Fix issues in formant generation~~ — done 2026-07-26/27: fixed noisy/wrong values at the edges of the analysis window (missing padding) and formants visibly jumping between recomputes of a slightly-different view (frame-grid phase drift); also switched the overlay from connected lines to Praat-style scatter dots with independent F1/F2/F3/All toggles — see [Formant Tracking](#formant-tracking). Still open: add pitch (F0) tracking alongside F1/F2/F3. `parselmouth`/Praat already has a well-established `Sound.to_pitch()` for this — the recommended path, rather than a new dependency (a `phonlab` LPC/IFC-based tracker was evaluated for its bundled F0 output and rejected: its LPC path is a simpler reimplementation of the same Burg math `parselmouth` already runs as real Praat C++ code, and its IFC alternative is slower and needs a speaker-class guess as input).
 3. Change playback so Play only plays the currently-visible section of the timeline (like Audacity), rather than the current selection/full-duration behavior — see [Playback](#playback).
 4. If queueing delay from the [persistent DSP worker](#persistent-worker-latency)'s single-process FIFO design shows up in practice (a slow formants request delaying queued spec requests), consider a small worker pool instead of one process — not implemented so far since normal usage (formants requests are manual/occasional) hasn't needed it.
-5. **Bug**: Selecting tiles across tiers doesn't work — reported by the user as broken. Needs investigation into `addTierEditInteraction`'s mousedown/shift-click/ctrl-click handling and `selectedTilesRef`/`syncSelectionState` (see [Tile Selection & Multi-Select](#tile-selection--multi-select)) to find where cross-tier selection breaks. Note: the mousedown handler's active `multiKey` (Ctrl/Cmd+click) branch implements a same-tier-only range-select (it resets `selectionAnchorRef` whenever the clicked tile's `tierId` differs from the anchor's), and the only code that ever supported toggling arbitrary tiles into a selection regardless of tier is commented out just above it (search "toggle tile in/out of multi-selection") — that's the most likely root cause to start from.
-6. Add up/down (increment/decrement) buttons for the timeline zoom control, alongside the existing `ZOOM` slider (`handleZoom`/`zoomValue` — see [CSS](#css) toolbar conventions and the waveform y-zoom `+`/`-` buttons in [Manual y-zoom control](#manual-y-zoom-control) for the established stepper-button pattern to mirror).
+5. ~~Fix cross-tier tile selection~~ — resolved in the current implementation. Ctrl/Cmd+click toggles arbitrary tiles across tiers, while Shift+click ranges are per-tier and additive across tiers. See [Cross-tier selection](#cross-tier-selection) for the exact behavior and invariants.
+6. ~~Add up/down zoom for the timeline viewing window~~ — done: compact toolbar `−`/`+` buttons and Arrow Up/Down both call `adjustTimelineZoom`, stepping the existing ZOOM control by `TIMELINE_ZOOM_STEP` (clamped to `[0, 100]`).
 7. Audit formant tracking accuracy against Praat itself — open the same audio file directly in Praat, generate formants there with matching settings (5500 Hz ceiling, 25ms window, see [Formant Tracking](#formant-tracking)), and compare F1/F2/F3 values at several time points to confirm this app's `dsp_server.py` output actually matches Praat's own numbers now that the edge-padding and frame-grid-jump bugs are fixed.
 8. Add a higher-resolution spectrogram option. Current analysis parameters (`WIN_LENGTH=2048`, `N_FFT=4096`, see [Analysis parameters](#analysis-parameters-matches-audacitys-own-spectrogram-settings-defaults)) are hardcoded to match Audacity's own defaults — investigate whether a sharper/higher-resolution mode is worth adding (e.g. a larger `N_FFT` or a toggle), and what the tradeoffs are (compute cost per `/api/compute-dsp` request, payload size, whether it's needed given the mel-warped display axis already limits perceptible detail at typical zoom levels).
 9. Make undo/redo arrows thicker 

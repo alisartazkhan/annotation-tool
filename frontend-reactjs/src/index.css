@@ -222,7 +222,7 @@ html, body {
 .toolbar > * { flex-shrink: 0; }
   */
 
-.logo { font-weight: 600; font-size: 13px; color: var(--text); letter-spacing: -0.3px; display: flex; align-items: center; gap: 0; }
+.logo { position: relative; font-weight: 600; font-size: 13px; color: var(--text); letter-spacing: -0.3px; display: flex; align-items: center; gap: 0; }
 .logo span { color: var(--text-mute); font-weight: 400; font-size: 12px; margin-left: 6px; }
 .logo-btn {
   background: none; border: none; padding: 0; margin: 0;
@@ -509,6 +509,13 @@ html, body {
 }
 .zoom-label {
   font-size: 10px; font-family: var(--mono); color: var(--text-dark);
+}
+.toolbar .zoom-step-btn {
+  width: 24px; min-width: 24px; padding: 0;
+  font-size: 16px; font-weight: 500;
+}
+.toolbar .zoom-step-btn:disabled {
+  opacity: 0.35; cursor: default;
 }
 input[type="range"] { width: 90px; accent-color: var(--accent); cursor: pointer; }
 

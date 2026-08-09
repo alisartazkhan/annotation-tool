@@ -23,6 +23,7 @@ export const SHORTCUTS = [
   { keys: ['R'], desc: 'Force-refresh the spectrogram for the current view' },
   { keys: ['1'], desc: 'Toggle edit mode on/off (on by default)' },
   { keys: ['←', '→'], desc: 'Pan the view by 20% of the current span' },
+  { keys: ['↑', '↓'], desc: 'Zoom the timeline viewing window in / out' },
   { keys: ['+', '-'], desc: 'Zoom the waveform amplitude, or tile text size if a tier was last clicked' },
   { keys: ['Ctrl/Cmd+S'], desc: 'Save the TextGrid to disk' },
   { keys: ['Ctrl/Cmd+Z'], desc: 'Undo' },
@@ -30,14 +31,16 @@ export const SHORTCUTS = [
   { keys: ['Ctrl/Cmd+C'], desc: 'Copy the selected tile(s) — or a group across tiers (edit mode, requires a selection)' },
   { keys: ['Ctrl/Cmd+V'], desc: 'Paste the copied tile(s) as new tile(s) anchored at the playhead (edit mode)' },
   { keys: ['⌫', 'Delete'], desc: 'Delete the selected tile(s) (edit mode, requires a selection)' },
-  { keys: ['Shift'], suffix: '+click', desc: 'Range-select tiles from the last-selected tile to the clicked tile (edit mode)' },
-  { keys: ['Ctrl/Cmd'], suffix: '+click (or drag)', desc: 'Same range-select as Shift+click (edit mode)' },
+  { keys: ['Shift'], suffix: '+click', desc: 'Range-select in this tier (keeps other tiers selected); does not set the play region (edit mode)' },
+  { keys: ['Ctrl/Cmd'], suffix: '+click (or drag)', desc: 'Toggle tiles into/out of a multi-selection across tiers — unlike a plain click, does not replace the selection or set the play region; drag adds tiles in the starting tier (edit mode)' },
 ];
 
 export const TILE_EDITING_HINTS = [
-  { keys: ['Click'], desc: 'Select a tile' },
+  { keys: ['Click'], desc: 'Select one tile exclusively and set the play region to it (replaces any previous multi-selection)' },
+  { keys: ['Ctrl/Cmd'], suffix: '+click', desc: 'Add or remove that tile from the multi-selection without clearing others or changing the play region' },
+  { keys: ['Shift'], suffix: '+click', desc: 'Select an anchored contiguous range in this tier while keeping selections in other tiers' },
   { keys: ['Double-click'], desc: 'Rename a tile (opens the label editor)' },
-  { keys: ['Right-click'], desc: 'Open the context menu — rename, merge with next, delete, or validate confidence score 1' },
+  { keys: ['Right-click'], desc: 'Open the context menu — rename, merge with next, delete, or mark a word validated' },
   { keys: ['Click+Drag'], desc: 'Set a loop selection region' },
   { keys: ['Click+Alt+Drag'], desc: 'Drag a tile edge without snapping to nearby boundaries' },
 ];

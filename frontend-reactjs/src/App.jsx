@@ -26,6 +26,7 @@ const YZOOM_STEP = 1.2;
 const FONT_SCALE_MIN = 0.7;
 const FONT_SCALE_MAX = 2;
 const FONT_SCALE_STEP = 1.15;
+const TIMELINE_ZOOM_STEP = 2; // slider percentage points per toolbar +/- click
 
 // ── Enhanced-spectrogram rolling prefetch buffer ────────────────────────────
 const SPEC_BUFFER_MULTIPLIER = 3;     // total cached span = 3x the current viewport
@@ -270,7 +271,7 @@ const EDITED_GREEN = [0, 169, 165]; // #00A9A5
 // lightened end of the scoreColor() gradient, so they read as clearly "max confidence".
 const SCORE_ONE_GREEN = [0, 200, 50]; // #00C832
 
-function scoreColor(score, alpha = 1) {
+function scoreColorRgb(score) {
   let r = score < 0.5 ? 255 : Math.round(255 * (1 - (score - 0.5) * 2));
   let g = score > 0.5 ? 200 : Math.round(200 * score * 2);
   let b = 50;
@@ -282,7 +283,16 @@ function scoreColor(score, alpha = 1) {
     g = Math.round(g + (255 - g) * lighten);
     b = Math.round(b + (255 - b) * lighten);
   }
+  return [r, g, b];
+}
+
+function scoreColor(score, alpha = 1) {
+  const [r, g, b] = scoreColorRgb(score);
   return alpha < 1 ? `rgba(${r},${g},${b},${alpha})` : `rgb(${r},${g},${b})`;
+}
+
+function rgbaFromRgb(rgb, alpha) {
+  return alpha < 1 ? `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${alpha})` : `rgb(${rgb[0]},${rgb[1]},${rgb[2]})`;
 }
 
 function pixelsToCanvas(res) {
@@ -1209,9 +1219,10 @@ export default function App() {
     const numRows = Math.max(1, ...items.map(it => (it.row ?? 0) + 1));
     const rowH = h / numRows;
     const inEdit = editModeRef.current;
-    const fillColor   = isWord ? 'rgba(58,123,213,0.18)'  : 'rgba(170,130,220,0.15)';
-    const strokeColor = isWord ? 'rgba(58,123,213,0.45)'  : 'rgba(170,130,220,0.4)';
-    const editFill    = isWord ? 'rgba(58,123,213,0.30)'  : 'rgba(170,130,220,0.28)';
+    // Default tier chrome (no score / not edited). Selection brightens these same RGBs
+    // rather than swapping to a fixed accent color.
+    const defaultRgb  = isWord ? [58, 123, 213] : [170, 130, 220];
+    const strokeColor = rgbaFromRgb(defaultRgb, isWord ? 0.45 : 0.4); // hover-edge restore
     const fontSize    = Math.round(Math.max(11, Math.min(24, rowH * 0.45)) * fontScaleRef.current);
     const font        = isWord ? `500 ${fontSize}px Inter,sans-serif` : `${Math.max(10, fontSize - 1)}px 'JetBrains Mono',monospace`;
     const hoverEdge   = hoverEdgeRef.current;
@@ -1230,16 +1241,26 @@ export default function App() {
       const hasScore = isWord && item.score != null;
       const isEdited   = isWord && item.edited;
       const isPerfectScore = hasScore && item.score === 1;
-      const fill   = isSelected ? (isWord ? 'rgba(58,123,213,0.55)' : 'rgba(170,130,220,0.50)')
-                   : isEdited   ? `rgba(${EDITED_GREEN.join(',')},${inEdit ? 0.40 : 0.28})`
-                   : isPerfectScore ? `rgba(${SCORE_ONE_GREEN.join(',')},${inEdit ? 0.40 : 0.28})`
-                   : hasScore   ? scoreColor(item.score, inEdit ? 0.40 : 0.28)
-                   :              (inEdit ? editFill : fillColor);
-      const stroke = isSelected ? (isWord ? '#7aacf0' : '#aa82dc')
-                   : isEdited   ? `rgb(${EDITED_GREEN.join(',')})`
-                   : isPerfectScore ? `rgb(${SCORE_ONE_GREEN.join(',')})`
-                   : hasScore   ? scoreColor(item.score, 0.75)
-                   :              strokeColor;
+
+      // Keep the tile's own hue; selection only boosts fill alpha + stroke weight.
+      let rgb;
+      let kind; // 'default' | 'scored' | 'solid' (edited / perfect — full stroke when unselected)
+      if (isEdited) { rgb = EDITED_GREEN; kind = 'solid'; }
+      else if (isPerfectScore) { rgb = SCORE_ONE_GREEN; kind = 'solid'; }
+      else if (hasScore) { rgb = scoreColorRgb(item.score); kind = 'scored'; }
+      else { rgb = defaultRgb; kind = 'default'; }
+
+      let fillAlpha;
+      let strokeAlpha;
+      if (kind === 'default') {
+        fillAlpha = isSelected ? 0.55 : (inEdit ? (isWord ? 0.30 : 0.28) : (isWord ? 0.18 : 0.15));
+        strokeAlpha = isSelected ? 1 : (isWord ? 0.45 : 0.4);
+      } else {
+        fillAlpha = isSelected ? 0.55 : (inEdit ? 0.40 : 0.28);
+        strokeAlpha = (isSelected || kind === 'solid') ? 1 : 0.75;
+      }
+      const fill = rgbaFromRgb(rgb, fillAlpha);
+      const stroke = rgbaFromRgb(rgb, strokeAlpha);
       ctx.fillStyle = fill;
       ctx.fillRect(x0, ry + 2, bw, rowH - 4);
       ctx.strokeStyle = stroke; ctx.lineWidth = isSelected ? 2 : (inEdit ? 1.5 : 1);
@@ -2185,6 +2206,26 @@ export default function App() {
     setZoomValue(v);
     applyZoom(sliderToSpan(v));
   }, [sliderToSpan, applyZoom]);
+
+  // Read the live view span (not zoomValue state) so keyboard/button steppers stay
+  // in sync after wheel/minimap zoom without waiting for a re-render.
+  const adjustTimelineZoom = useCallback((dir) => {
+    const { t0, t1 } = viewRef.current;
+    const current = spanToSlider(t1 - t0);
+    handleZoom(Math.max(0, Math.min(100, current + dir * TIMELINE_ZOOM_STEP)));
+  }, [spanToSlider, handleZoom]);
+
+  // Arrow Up/Down zoom the timeline viewing window (←/→ already pan).
+  useEffect(() => {
+    const handler = (e) => {
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+      if (e.code !== 'ArrowUp' && e.code !== 'ArrowDown') return;
+      e.preventDefault();
+      adjustTimelineZoom(e.code === 'ArrowUp' ? 1 : -1);
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [adjustTimelineZoom]);
 
   // ── Interaction ───────────────────────────────────────────────────────
 
@@ -3414,7 +3455,27 @@ export default function App() {
         </div>
         <div className="zoom-row">
           <span className="zoom-label">ZOOM</span>
+          <button
+            type="button"
+            className="btn zoom-step-btn"
+            onClick={() => adjustTimelineZoom(-1)}
+            disabled={zoomValue <= 0}
+            title="Zoom timeline out"
+            aria-label="Zoom timeline out"
+          >
+            −
+          </button>
           <input type="range" min="0" max="100" value={zoomValue} onChange={e => handleZoom(+e.target.value)} title="Zoom level" />
+          <button
+            type="button"
+            className="btn zoom-step-btn"
+            onClick={() => adjustTimelineZoom(1)}
+            disabled={zoomValue >= 100}
+            title="Zoom timeline in"
+            aria-label="Zoom timeline in"
+          >
+            +
+          </button>
         </div>
         <button
           className={`btn${showDashboard ? ' active' : ''}`}
