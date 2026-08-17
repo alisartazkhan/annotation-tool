@@ -44,3 +44,12 @@ export const TILE_EDITING_HINTS = [
   { keys: ['Click+Drag'], desc: 'Set a loop selection region' },
   { keys: ['Click+Alt+Drag'], desc: 'Drag a tile edge without snapping to nearby boundaries' },
 ];
+
+// TILE_COLOR_LEGEND: each row is { swatchKey: string, label: string, desc: string }
+//   - swatchKey looks up the actual color in TILE_COLOR_SWATCHES (App.jsx) — kept there
+//     since that's where the real color constants (EDITED_GREEN, default tile hues) live.
+export const TILE_COLOR_LEGEND = [
+  { swatchKey: 'word', label: 'Word (no score)', desc: 'Default color for a word tile that has no confidence score' },
+  { swatchKey: 'phone', label: 'Phoneme / custom tile', desc: 'Default color for phoneme tiles and any custom tier' },
+  { swatchKey: 'edited', label: 'Edited / validated', desc: 'A word that was manually created, edited, or marked "Validate word" — always this color regardless of score' },
+];

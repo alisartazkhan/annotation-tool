@@ -98,7 +98,7 @@ All visuals are drawn on `<canvas>` elements via the Canvas 2D API. There is no 
 
 ### Timeline scrollbar
 
-A slim strip (`.scrollbar-strip`, 14px tall) sits directly below the waveform/spectrogram panels, above the tier-divider — full-width, with a 56px `.scrollbar-gutter` matching `.panel-gutter`/`.ruler-gutter`/`.minimap-gutter` so all rows stay vertically aligned.
+A slim strip (`.scrollbar-strip`, 12px tall) sits directly below the waveform/spectrogram panels, above the tier-divider — full-width, with a 64px `.scrollbar-gutter` matching `.panel-gutter`/`.ruler-gutter`/`.minimap-gutter` so all rows stay vertically aligned. The playhead overlay's `GUTTER` constant in `drawOverlay()` must match this same 64px width.
 
 `drawScrollbar()` draws a track plus a highlighted thumb rect sized/positioned by `t0/DUR` and `(t1-t0)/DUR` — the same proportions the minimap's viewport box uses, but without the minimap's word-tick thumbnails.
 
@@ -239,7 +239,7 @@ peak-scanning loop were deleted entirely.
 multiplier on top of the fixed baseline above, adjusted via `adjustYZoom(dir)`
 (`dir`: `+1`/`-1`), which multiplies or divides by `YZOOM_STEP` (1.2) and clamps to
 `[YZOOM_MIN_MULT, YZOOM_MAX_MULT]` (0.25–12). Two ways to trigger it:
-- **+/- buttons** in the waveform panel's gutter (the "WV" label column), above and
+- **+/- buttons** in the waveform panel's gutter (the "WAV" label column), above and
   below the label.
 - **+/- keys**, but only when the waveform was the last thing clicked — see
   [Keyboard shortcut context](#keyboard-shortcut-context-waveform-vs-tiles) below.
@@ -363,7 +363,7 @@ The tier canvases in edit mode (`addTierEditInteraction`) also support dragging 
 
 **Committing edits**: use `commitTierItems(tierId, updated)` inside this function.
 
-**Undo/Redo**: `pushUndo()` snapshots words + phones + customTiers (max 100) onto `undoStackRef` and clears `redoStackRef`. Ctrl/Cmd+Z fires `popUndo()` (pushes current state to `redoStackRef`, restores previous) + `redraw()`; Ctrl/Cmd+Y fires `popRedo()`. Ctrl/Cmd+Shift+Z is not implemented. Two `useState` counters, `undoCount`/`redoCount`, mirror the ref stack lengths so the toolbar buttons re-render and grey out when their stack is empty (refs alone do not trigger re-renders). Both buttons are icon-only (`↶` / `↷`), with `.btn-undo-redo` setting `font-size: 20px`.
+**Undo/Redo**: `pushUndo()` snapshots words + phones + customTiers (max 100) onto `undoStackRef` and clears `redoStackRef`. Ctrl/Cmd+Z fires `popUndo()` (pushes current state to `redoStackRef`, restores previous) + `redraw()`; Ctrl/Cmd+Y fires `popRedo()`. Ctrl/Cmd+Shift+Z is not implemented. Two `useState` counters, `undoCount`/`redoCount`, mirror the ref stack lengths so the toolbar buttons re-render and grey out when their stack is empty (refs alone do not trigger re-renders). Both buttons are icon-only (`↩` / `↪`, flipped vertically via `transform: scaleY(-1)` on `.btn-undo-redo` so the hook curves upward — 2026-08-17), sitting in the toolbar's center group next to Play/Stop rather than on the right (see [Toolbar layout & overflow menu](#toolbar-layout--overflow-menu-2026-08-17-toolbar-cleanup)); `.btn-undo-redo` sets `font-size: 21px`.
 
 **Double-click empty** → creates tile, opens label editor.  
 **Double-click tile** → opens inline label editor.  
@@ -559,7 +559,7 @@ Appears inline in the logo bar:
 - `✓ Saved` — green, fades after 2s
 - `✕ Save failed` — red, fades after 2s
 
-CSS classes: `.save-indicator`, `.save-indicator--unsaved`, `.save-indicator--saving`, `.save-indicator--saved`, `.save-indicator--error`.
+CSS classes: `.save-indicator`, `.save-indicator--unsaved`, `.save-indicator--saving`, `.save-indicator--saved`, `.save-indicator--error`. As of 2026-08-17, `--unsaved` is plain colored text (fixed `#ff9500`) rather than a pill — see [Toolbar layout & overflow menu](#toolbar-layout--overflow-menu-2026-08-17-toolbar-cleanup); the other three variants are unchanged.
 
 ### Unsaved state tracking
 
@@ -740,9 +740,9 @@ Every `/api/compute-dsp` request decodes only a small padded region of the WAV a
 
 ### Manual "Force Refresh"
 
-`calcSpecForView` — button handler, relabeled from the old "⟳ Enhance Spectrogram" (now "↻ Force Refresh"). Bypasses the debounce: calls `fetchEnhancedSpec(computePaddedWindow(t0,t1), {manual: true})` directly, and also backfills the current view's overview chunk via `fetchOverviewChunk` if missing. Normal navigation also fetches overview chunks through `scheduleSpecPrefetch`; this button forces the work immediately.
+`calcSpecForView` — handler for the "↻ Force Refresh" item in the [spectrogram right-click menu](#spectrogram-right-click-menu-2026-08-17) (relabeled from the old "⟳ Enhance Spectrogram"; formerly a standalone floating button, moved into the menu along with everything else that used to live in `.spec-overlay-btns`). Bypasses the debounce: calls `fetchEnhancedSpec(computePaddedWindow(t0,t1), {manual: true})` directly, and also backfills the current view's overview chunk via `fetchOverviewChunk` if missing. Normal navigation also fetches overview chunks through `scheduleSpecPrefetch`; this menu item forces the work immediately.
 
-`calcFormantForView` (the separate "Generate Formants" button) intentionally does **not** touch `spectroCacheRef` — it discards the spectrogram data in its response so it can't clobber a wider prefetched buffer with an unpadded strip.
+`calcFormantForView` (the menu's "⟳ Regenerate formants & pitch" item) intentionally does **not** touch `spectroCacheRef` — it discards the spectrogram data in its response so it can't clobber a wider prefetched buffer with an unpadded strip.
 
 ### Cache hit check
 
@@ -801,9 +801,9 @@ Drawn directly on the spectrogram canvas at the end of `drawSpec` (not a separat
 
 ## Formant Tracking
 
-Formants are computed by `dsp_server.py` using `parselmouth` (Python bindings for Praat). The Praat Burg algorithm (`To Formant (burg)`) with a 5500 Hz ceiling is the same algorithm Praat itself uses, giving linguistically correct F1/F2/F3 values.
+Formants are computed by `dsp_server.py` using `parselmouth` (Python bindings for Praat). The Praat Burg algorithm (`To Formant (burg)`) with a 5500 Hz ceiling is the same algorithm Praat itself uses, giving linguistically correct F1/F2/F3 values. As of 2026-08-17 the same request also returns an F0 pitch track (Praat's `To Pitch` autocorrelation method) — see [Pitch (F0) tracking](#pitch-f0-tracking-2026-08-17) below.
 
-Triggered by "Generate Formants" button → `calcFormantForView` → `/api/compute-dsp` with `kind: 'formants'`. The response contains formants only (`spec` is `null`), and the existing spectrogram cache is intentionally left untouched.
+Triggered by "Generate Formants" button → `calcFormantForView` → `/api/compute-dsp` with `kind: 'formants'`. The response contains formants (and pitch) only (`spec` is `null`), and the existing spectrogram cache is intentionally left untouched.
 
 ### Analysis window: padding + fixed-grid quantization (2026-07-26/27)
 
@@ -814,14 +814,23 @@ Triggered by "Generate Formants" button → `calcFormantForView` → `/api/compu
 
 `compute_formants` also reuses `_get_audio_slice()`'s bounded/cached decode (the same one the spectrogram path uses) instead of re-reading the whole file from disk on every call.
 
-### Formant data shape
+### Pitch (F0) tracking (2026-08-17)
+
+`compute_pitch(snd, t0, t1)` (`dsp_server.py`) extracts F0 via Praat's `To Pitch` autocorrelation method (`PITCH_FLOOR_HZ=75`, `PITCH_CEILING_HZ=600` — Praat's own long-standing defaults, wide enough for typical adult speech), following the recommendation in the old todo item over adding a new dependency (a `phonlab` LPC/IFC tracker was evaluated and rejected — see git history — since parselmouth's Burg/pitch math is already real Praat C++ code).
+
+It's called from inside `compute_formants`, reusing the **same** padded/quantized `Sound` object formants already built for the request — no separate decode or second `/api/compute-dsp` round trip. It does *not*, however, share the formant frame grid: `To Pitch`'s default time step is derived from `PITCH_FLOOR_HZ`, not `FORMANT_WINDOW_SEC`, so pitch frames land at different times than formant frames. The response carries pitch as its own `(f0, timesF0)` pair rather than forcing it onto the shared `times` array formants use (see data shape below). No new phase-jump bug here from the same-view-request problem the formant frame grid had — pitch reuses the *already-quantized* buffer from `compute_formants`, so it inherits that fix for free rather than needing its own quantization pass.
+
+### Formant + pitch data shape
 
 ```js
 formantTrackRef.current = {
   f1: number[],       // Hz per frame (0 = unvoiced/silence)
   f2: number[],
   f3: number[],
-  times: number[],    // absolute time in seconds for each frame
+  times: number[],    // absolute time in seconds for each formant frame
+  f0: number[],       // Hz per frame (0 = unvoiced/silence) — pitch
+  timesF0: number[],  // absolute time in seconds for each pitch frame — a DIFFERENT
+                       // grid than `times` above, do not zip them together by index
   regionT0: number,   // start time of the computed region
   sr: number,
 }
@@ -829,19 +838,43 @@ formantTrackRef.current = {
 
 `times[]` replaces the old `hop/frames` indexing.
 
-### Rendering: Praat-style scatter dots (2026-07-27)
+### Rendering: F1/F2/F3 scatter dots, F0 line (2026-07-27, F0 added 2026-08-17)
 
-`drawSpec` draws one small filled circle (`DOT_R = 3` px) per actual analysis frame that falls in the current view, color-coded per formant (F1 red / F2 green / F3 blue) — not a connected line. This replaced an earlier implementation that looped over every *pixel column*, binary-searched `times[]` for the nearest frame, and drew a connected line through the results; that interpolated a straight line between frames that could be tens of ms apart when zoomed out, which doesn't match Praat's own per-frame dot display. The new version is also simpler: no binary search, no pixel-column loop, no `useTimes`/legacy `hop`/`frames`-shape branch (that legacy shape was already dead — the only producer was the now-deleted `formantWorker.js`, see below). Dots naturally thin out when zoomed in (fewer frames per pixel) and cluster when zoomed out (more frames per pixel).
+**F1/F2/F3** — `drawSpec` draws one small filled circle (`DOT_R = 3` px) per actual analysis frame that falls in the current view, color-coded per formant (F1 red / F2 green / F3 blue) — not a connected line. This replaced an earlier implementation that looped over every *pixel column*, binary-searched `times[]` for the nearest frame, and drew a connected line through the results; that interpolated a straight line between frames that could be tens of ms apart when zoomed out, which doesn't match Praat's own per-frame dot display. The new version is also simpler: no binary search, no pixel-column loop, no `useTimes`/legacy `hop`/`frames`-shape branch (that legacy shape was already dead — the only producer was the now-deleted `formantWorker.js`, see below). Dots naturally thin out when zoomed in (fewer frames per pixel) and cluster when zoomed out (more frames per pixel).
 
-**Y-axis matches the spectrogram exactly.** Formant dots use the same mel-scale mapping as the spectrogram's own frequency-axis ticks — `melHz = 2595·log10(1 + hz/700)`, `FMAX = min(8000, ft.sr/2)` for the dots vs. a flat `8000` for the tick labels (equal in practice for any file with sample rate ≥16kHz, which is effectively all of them). A dot at a given y-position lines up with the frequency-axis labels and the spectrogram pixels directly behind it — there's no independent scaling to keep in sync.
+**F0 (pitch)** is drawn as a **connected gold line** instead — the conventional way to show a pitch contour (matches Praat's own Sound+Pitch view), and visually distinct from the F1/F2/F3 dot style. The line is broken into separate subpaths at every unvoiced frame (`hz === 0`): the loop tracks a `drawing` flag, calls `ctx.beginPath()`/`moveTo` to start a new subpath on the first voiced frame after a gap, `lineTo` for each subsequent voiced frame, and `ctx.stroke()`s the subpath as soon as an unvoiced frame ends it (plus once more after the loop for whatever segment was still open) — so voicing gaps never get bridged by a straight line across silence. This uses `ft.timesF0`, not the formants' shared `ft.times`.
 
-### Per-formant toggles (2026-07-27)
+**Y-axis matches the spectrogram exactly.** Formant/pitch dots use the same mel-scale mapping as the spectrogram's own frequency-axis ticks — `melHz = 2595·log10(1 + hz/700)`, `FMAX = min(8000, ft.sr/2)` for the dots vs. a flat `8000` for the tick labels (equal in practice for any file with sample rate ≥16kHz, which is effectively all of them). A dot at a given y-position lines up with the frequency-axis labels and the spectrogram pixels directly behind it — there's no independent scaling to keep in sync. Typical adult F0 (75–600 Hz, per `PITCH_FLOOR_HZ`/`PITCH_CEILING_HZ`) renders low on the mel-warped axis, near the bottom of the panel.
 
-Replaced the old single "Overlay on/off" pill toggle with four buttons — **F1**, **F2**, **F3**, **All** — each independently showing/hiding that formant's dot track (previously toggling was all-or-nothing). State lives in `formantVisibleRef`/`formantVisible` (dual state+ref, `{ f1, f2, f3 }` booleans, default all `true`). `toggleFormant(key)` flips one and redraws; `toggleAllFormants()` turns all three on if any are currently off, or all three off if all three are on. Each F1/F2/F3 button lights up in the same color as its dot track (red/green/blue via `.formant-card__seg-btn--f1/f2/f3.on`); "All" uses the neutral accent color. `calcFormantForView` re-enables all three if a fresh "Generate Formants" click finds every formant currently toggled off (mirrors the old auto-enable-on-generate behavior).
+### Per-track toggles (2026-07-27, moved into the right-click menu 2026-08-17)
+
+Four independent checkboxes — **F1**, **F2**, **F3**, **Pitch (F0)**, all inline under "Formants" — each showing/hiding that track's dot/line overlay; see [Spectrogram right-click menu](#spectrogram-right-click-menu-2026-08-17) below. State lives in `formantVisibleRef`/`formantVisible` (dual state+ref, `{ f0, f1, f2, f3 }` booleans, **default all `false`** — nothing is drawn until a checkbox is checked, unlike the old toolbar buttons which defaulted to all `true`). `toggleFormant(key)` flips one and redraws. There's no "All" control anymore (the old toolbar's fourth button) — dropped as dead weight once the menu made checking three individual boxes trivial.
+
+Two call paths now fetch formant/pitch data, split specifically so a checkbox click never clobbers the other tracks' visibility:
+- **`fetchFormantData()`** — the shared fetch, no visibility side effects. POSTs to `/api/compute-dsp` with `kind: 'formants'` and stores the result in `formantTrackRef`; returns `true`/`false` so callers can bail out on failure.
+- **`calcFormantForView()`** — the menu's "⟳ Regenerate formants & pitch" item. Calls `fetchFormantData()`, then unconditionally sets all four tracks visible (mirrors the old toolbar's auto-enable-on-generate behavior) and redraws.
+- **`toggleSpecTrack(key)`** — a Formants/Pitch checkbox's `onChange`. If `formantTrackRef.current` is still `null` (nothing generated yet for this view), calls `fetchFormantData()` first; either way, then calls `toggleFormant(key)` for **only** that one key. This is why it's a separate path from `calcFormantForView`: reusing that function here would have reset every track to visible on first use, undoing whichever tracks the user had already unchecked.
 
 ### Legacy worker
 
 `formantWorker.js` (JS LPC, order 12) was superseded by `dsp_server.py` and deleted (2026-07-25 dead-code audit) — check git history if it's ever needed again.
+
+### Spectrogram right-click menu (2026-08-17)
+
+Right-clicking the spectrogram canvas (`onContextMenu` on `specCanvasRef`) opens `SpecContextMenu` — a React-rendered popup, **not** the imperative `document.createElement` pattern the tier canvases' right-click menu uses (see [Key Invariants](#key-invariants-and-non-obvious-constraints)) — chosen specifically because this menu needs reactive checked/selected state (checkboxes, a colormap radio list) rather than a flat list of one-shot actions. It replaced the old always-visible `.spec-overlay-btns` floating panel (colormap `<select>` + Force Refresh button + Generate Formants card) entirely — none of that JSX or its CSS (`.spec-overlay-btns`, `.formant-card*`) still exists.
+
+Menu structure:
+- **Spectrogram settings ▸** — submenu: "↻ Force Refresh" (`calcSpecForView`) and "⟳ Regenerate formants & pitch" (`calcFormantForView`).
+- **Colormap ▸** — submenu: Jet / Inferno / Viridis / Greys as a radio list (`●` marks the active one), calling the existing `handleColormapChange`.
+- **Formants** — a plain label (not a submenu) followed by inline **F1**/**F2**/**F3**/**Pitch (F0)** checkboxes, all at the same level (no submenu for F0 — an earlier version nested it under its own "Pitch ▸" submenu per the original mockup, but that was simplified to a plain checkbox per user feedback 2026-08-17).
+
+There's no "Reset view" item currently — it existed briefly (backed by a `resetSpecView()` callback identical to the `F` keyboard shortcut's view-reset logic) but was pulled per user feedback 2026-08-17 pending a decision on whether/where it belongs. If re-added, the `F`-key handler's `viewRef.current = { t0: 0, t1: durationRef.current }; redraw();` is the logic to reuse.
+
+All four checkboxes call `toggleSpecTrack(key)` (see "Per-track toggles" above) and deliberately do **not** close the menu, so multiple tracks can be toggled in one right-click session; the two submenu leaf actions call `onClose()` after running.
+
+**Submenu flyout is pure CSS**, not React state: `.ctx-menu__item--parent:hover > .ctx-menu__submenu { display: block; }`. No hover state is tracked in JS. The one piece of placement logic that does need JS is edge-avoidance — `handleSpecContextMenu` (`App.jsx`) computes `flip: e.clientX > window.innerWidth - SPEC_CTX_MENU_W` at click time and clamps `y` to `window.innerHeight - SPEC_CTX_MENU_H`, so the menu (and its rightward-opening submenus) don't get clipped by the right/bottom edge of the viewport; `flip` swaps every submenu to `.ctx-menu__submenu--flip` (`right: 100%` instead of `left: 100%`) for that one open menu instance. `SPEC_CTX_MENU_W`/`_H` are rough estimates of the menu's on-screen footprint, not measured — if the menu's real size changes significantly, retune these two constants.
+
+Dismissal follows the same pattern as the tier context menu: a `document`-level `mousedown` listener closes the menu on any click outside `menuRef.current`.
 
 ---
 
@@ -909,12 +942,13 @@ src.onended = () => {
 
 ### Loop toast
 
-Each time the loop restarts (same `onended` branch above), a toast pops up top-center of the screen for 5 seconds and then disappears:
+Each time the loop restarts (same `onended` branch above), a toast pops up top-center of the screen for 2 seconds and then disappears:
 
-- State: `loopToast` (bool) + `loopToastTimerRef` (holds the `setTimeout` id so rapid loop restarts reset the 5s timer instead of stacking).
-- Rendered near the other fixed-position toasts (~line 3613): a `position: fixed` box, top-center, containing `public/loop-alert.gif` (64px tall) and the text "Looping selection…".
+- State: `loopToast` (bool) + `loopToastTimerRef` (holds the `setTimeout` id so rapid loop restarts reset the 2s timer instead of stacking).
+- Rendered near the other fixed-position toasts: a `position: fixed` box, top-center, using the shared `.toast .toast--info` classes (accent-tinted background/border/text) rather than one-off inline styling, containing `public/loop-alert.gif` (16px tall) and the text "Looping selection…".
 - The gif file lives at `public/loop-alert.gif` and is referenced as `/loop-alert.gif` (served statically by Vite from `public/`).
-- Box/gif size was intentionally doubled from the initial version (padding, font size, border radius, gap, and gif height all 2×) per user request — current gif height is 64px.
+
+**2026-08-17 — resized down to match the compact MFA toasts.** The box had previously been enlarged well past the other toasts (64px gif, 5s duration, custom oversized padding/border-radius/font-size) per an earlier one-off request; that was reverted in favor of reusing the shared `.toast`/`.toast--info` treatment at 16px/2s, consistent with every other toast in the app (this was the old "right-size the loop-selection toast … vs compact MFA toasts" todo).
 
 ---
 
@@ -925,7 +959,7 @@ Word tiles are normally colored by `item.score` via `scoreColor(score, alpha)`. 
 - 0.5 → yellow `rgb(255, 200, 50)`
 - `scoreColor(1)` → light green `rgb(115, 225, 142)` (used by the dashboard legend)
 
-On the tier canvas and minimap, an **exact** `score === 1` is special-cased to `SCORE_ONE_GREEN = rgb(0, 200, 50)` instead of using the lightened end of `scoreColor`. Items without a score fall back to blue (words) or purple (phonemes/custom). The dashboard legend calls `scoreColor(0)`/`scoreColor(0.5)`/`scoreColor(1)` directly, so its 1.0 endpoint is the light green above rather than `SCORE_ONE_GREEN`.
+On the tier canvas and minimap, an **exact** `score === 1` is special-cased to `SCORE_ONE_GREEN = rgb(42, 166, 78)` instead of using the lightened end of `scoreColor`. Items without a score fall back to the muted default tile hues (`DEFAULT_WORD_RGB = rgb(112,143,88)`, `DEFAULT_PHONE_RGB = rgb(143,114,181)`). The dashboard legend calls `scoreColor(0)`/`scoreColor(0.5)`/`scoreColor(1)` directly, so its 1.0 endpoint is the light green above rather than `SCORE_ONE_GREEN`.
 
 ### Edited word rendering
 
@@ -944,7 +978,7 @@ When a word is created or modified, `commitTierItems` sets `score: 2` alongside 
 
 Note: the tile color and the dashboard exclusion are independent — `drawTier`/minimap use the `edited` flag for canvas color; `ConfidenceDashboard` uses the `edited` flag to filter the `score` value out of histogram and stats.
 
-**◎ Scores** button toggles `ConfidenceDashboard` — stat grid, 10-bin histogram, color legend, 5 lowest-confidence words, and (below the lowest-confidence list) an **Edited words** section.
+**Scores** button (icon dropped 2026-08-17, see [Toolbar layout & overflow menu](#toolbar-layout--overflow-menu-2026-08-17-toolbar-cleanup)) toggles `ConfidenceDashboard` — stat grid, 10-bin histogram, color legend, 5 lowest-confidence words, and (below the lowest-confidence list) an **Edited words** section.
 
 ### Edited words list
 
@@ -1007,6 +1041,12 @@ The edit mode hotkey is hardcoded to `1` in the keydown handler. The check match
 
 > These shortcuts are also surfaced in-app via `ShortcutsPopover` — a non-blocking fold-out panel (opened by clicking the **GSA** logo in the toolbar; no backdrop, so the timeline/tiers stay clickable while it's open). `USAGE.md`'s [quick-reference table](../USAGE.md#keyboard-shortcuts--quick-reference) mirrors this table for end users — keep all three in sync with the keydown handler in `App.jsx`.
 
+### ShortcutsPopover sections (2026-08-17)
+
+`ShortcutsPopover` has three sections — **KEYBOARD** (`SHORTCUTS`), **TILE EDITING (EDIT MODE)** (`TILE_EDITING_HINTS`), and **TILE COLORS** (`TILE_COLOR_LEGEND`, added 2026-08-17: a confidence gradient bar plus swatches for the default word/phone/edited tile colors, mirroring `ConfidenceDashboard`'s own legend — see [Confidence Score Coloring](#confidence-score-coloring)). All three are `CollapsibleSection`s (`App.jsx`), **closed by default** so the popover opens compact; `openSections` (local `useState`, one bool per section) toggles independently per section — not an accordion, any combination can be open at once. `CollapsibleSection` renders as a `React.Fragment`, not a wrapping `<div>` — its header and children must stay direct children of the popover's 2-column CSS grid, since a wrapping element would pull the child rows out of that grid and break column alignment.
+
+`TILE_COLOR_LEGEND`'s row text lives in `shortcuts.js` (per that file's existing convention), but the actual swatch colors live in `App.jsx`'s `TILE_COLOR_SWATCHES`, next to `EDITED_GREEN`/`scoreColor` — the single source of truth for tile colors. `TILE_COLOR_SWATCHES.word`/`.phone` are literal copies of `drawTier`'s `defaultRgb` values and must be kept in sync manually if those ever change.
+
 ---
 
 ## CSS
@@ -1025,7 +1065,7 @@ The edit mode hotkey is hardcoded to `1` in the keydown handler. The check match
   --bg-tooltip, --border-tooltip, --text-soft     /* tooltips, secondary text */
   --shadow-color, --backdrop                      /* box-shadow / modal scrim */
   --kbd-*                                          /* shortcut-key chip styling (shortcuts popover) */
-  --card-*                                         /* formant-card / spectrogram overlay HUD */
+  --card-bg, --card-label                         /* remnants of the removed formant-card HUD — --card-bg is still used by the (currently unreferenced) .calc-spec-btn */
   --warn-*, --error-*, --save-*                   /* status-color families (keep hue across themes) */
   --mfa-*, --export-*, --tier-*                   /* semantic button families (keep hue across themes) */
   --mono                                /* "JetBrains Mono", monospace */
@@ -1048,13 +1088,29 @@ Notable component classes:
 | `.mfa-queue-dropdown` | MFA queue-count dropdown panel |
 | `.tier--selected` | Selected-tier outline glow — color supplied via the `--outline-color` inline custom property, not a hardcoded per-tier value |
 | `.confidence-dashboard` | `ConfidenceDashboard` sidebar chrome |
-| `.btn-undo-redo` | Undo/redo toolbar buttons — `font-size: 20px` so the `↶`/`↷` glyphs read larger than text-label buttons |
+| `.btn-undo-redo` | Undo/redo toolbar buttons — `font-size: 21px`, `transform: scaleY(-1)` flips the `↩`/`↪` glyphs' hook to curve upward |
+| `.toolbar-group` / `--left`/`--center`/`--right` | 3-part media-player toolbar layout (2026-08-17) — see [Toolbar layout & overflow menu](#toolbar-layout--overflow-menu-2026-08-17-toolbar-cleanup) |
+| `.toolbar-divider` | 1px vertical rule separating sub-clusters within the center/right toolbar groups |
+| `.toast--info` | Accent-tinted toast variant (2026-08-17), used by the loop-selection toast |
 
-`.panel-divider` and `.tier-divider` share one rule. `.panel-gutter` and `.tier-gutter` share a base rule; `.tier-gutter` adds `flex-direction: column; gap: 3px`.
+`.panel-divider` and `.tier-divider` share one rule. `.panel-gutter` and `.tier-gutter` share a base rule and are all 64px wide; `.tier-gutter` adds `flex-direction: column`, left alignment, and the optional `.gutter-subtitle` row.
+
+### Visual-only polish pass (2026-08-17)
+
+This pass was intentionally **presentation-only**: no handlers, keyboard shortcuts, TextGrid logic, DSP requests, MFA queueing, save/export behavior, or data models changed. It moved the UI toward the provided audio-editor references by changing CSS and canvas draw styling:
+
+- Toolbar: increased the bar height/padding, made the GSA mark larger, made Play the one prominent circular control, gave the time display more room, softened flat toolbar button hover states, and kept action groups visually separated with `.toolbar-divider`.
+- Timeline layout: changed the default `.panels`/`.tiers` split from a spectrogram-dominant layout to `0.70` / `0.30`, made the minimap 50px tall, and made the ruler 28px tall.
+- Gutters: widened every gutter to 64px, relabeled the waveform gutter from `WV` to `WAV`, the spectrogram gutter to `SPEC`, and added `Words` / `Phonemes` subtitles under `WRD` / `PHN`.
+- Tier controls: replaced the tier-visibility bar's inline style block with `.tier-visibility-bar`, `.tier-visibility-title`, `.tier-visibility-label`, `.tier-text-size-controls`, and `.tier-visibility-spacer`.
+- Canvas styling: playhead lines are now accent blue, waveform strokes/RMS overlays are softer, dark canvas backgrounds are closer to black-blue, tile text is dark on the now-more-opaque tiles, and default word/phone tile hues are muted sage/lavender rather than blue/purple.
+- Menus/popovers: `.ctx-menu` and submenus got larger padding, softer rounded corners, stronger shadow, and row hover styling via `--row-active-bg`.
+
+Keep the visual-only boundary in mind for follow-up polish: this is a styling layer over the same timeline/editor behavior. If a future change needs to alter interaction semantics, document it outside this section.
 
 ### Toolbar button height normalization
 
-Every button/control inside `.toolbar` (`.btn`, `.load-btn`, `.colormap-select`) is pinned to one shared height via the `--toolbar-btn-h` CSS variable (currently `28px`, defined in `:root`), plus `display: flex; align-items: center; justify-content: center;` so label text stays vertically centered regardless of font-size differences between button variants. `white-space: nowrap` on `.toolbar .btn`/`.load-btn` stops icon+label text (e.g. `◎ Scores`, `▶ Play`) from wrapping onto two lines when the toolbar is tight on space.
+Every button/control inside `.toolbar` (`.btn`, `.colormap-select`) is pinned to one shared height via the `--toolbar-btn-h` CSS variable (currently `32px`, defined in `:root`), plus `display: flex; align-items: center; justify-content: center;` so label text stays vertically centered regardless of font-size differences between button variants. `white-space: nowrap` on `.toolbar .btn` stops icon+label text (e.g. `↓ Export`) from wrapping onto two lines when the toolbar is tight on space. The Play button deliberately opts into a larger 40px circular size via `.toolbar .btn-play`.
 
 These rules are scoped with a `.toolbar` ancestor selector (`.toolbar .btn`, not bare `.btn`) so they don't affect the same class names reused in popovers/modals (Export popover, Tier-name popover, MFA word-picker modal), which are deliberately more compact. If you add a new toolbar control, give it one of the classes above (or add it to the scoped rule) rather than hand-tuning its padding — that's what caused the original height mismatch (no button class set an explicit `height`; each one's rendered height was just whatever `padding + font-size + border` happened to add up to).
 
@@ -1063,9 +1119,43 @@ These rules are scoped with a `.toolbar` ancestor selector (`.toolbar .btn`, not
 **Fixed — the toolbar used to overflow/get cut off at narrow window widths** with no wrapping or overflow handling at all (`.toolbar` was a fixed-height, non-wrapping flex row). Three changes, layered so nothing is ever hidden outright:
 
 1. **Shrunk the chrome itself, unconditionally**: `--toolbar-btn-h` `34px → 28px`, and `.toolbar .btn`/`.load-btn` horizontal padding `15px → 10px`. Free space savings with no behavior tradeoff.
-2. **Shortened three verbose labels** that had no functional value beyond their icon + a word: `"📄 Load TextGrid"` → `"📄 Load"` (added a `title` tooltip to keep it discoverable), `"Playback speed"` label → `"SPEED"` (brings it in line with the already-terse `"ZOOM"` label convention — the *options* in this same dropdown were already trimmed for the same reason, but the label next to it never was, until now), `"⚙ Run MFA"` → `"⚙ MFA"`.
+2. **Shortened three verbose labels** that had no functional value beyond their icon + a word: `"📄 Load TextGrid"` → `"📄 Load"` (added a `title` tooltip to keep it discoverable), `"Playback speed"` label → `"SPEED"` (brings it in line with the already-terse `"ZOOM"` label convention — the *options* in this same dropdown were already trimmed for the same reason, but the label next to it never was, until now), `"⚙ Run MFA"` → `"⚙ MFA"` (icon dropped entirely 2026-08-17, now plain `"MFA"`).
 3. **`.toolbar` now wraps** (`flex-wrap: wrap`, `min-height` instead of a fixed `height`) as the fallback safety net — nothing gets cut off, it just grows to a second row if it has to.
-4. **Loop/Scores/Export collapse to icon-only below 1100px** (an estimate — retune by resizing and watching where wrapping actually kicks in) to buy back room before wrapping is needed at all. Each button's word is a separate `<span className="btn-label">`, hidden via `@media (max-width: 1100px) { .toolbar .btn-label { display: none; } }`.
+4. **Loop/Scores/Export collapse to icon-only below 1100px** (an estimate — retune by resizing and watching where wrapping actually kicks in) to buy back room before wrapping is needed at all. Each button's word is a separate `<span className="btn-label">`, hidden via `@media (max-width: 1100px) { .toolbar .btn-label { display: none; } }`. **Superseded 2026-08-17** — see [Toolbar layout & overflow menu](#toolbar-layout--overflow-menu-2026-08-17-toolbar-cleanup) below; Loop is no longer a toolbar button and Scores/MFA no longer use `.btn-label` at all, so this breakpoint now only affects Export.
+
+### Toolbar layout & overflow menu (2026-08-17 toolbar cleanup)
+
+Per user request ("fewer pills, less color" + a classic 3-part "media player" layout), the toolbar was restructured and its remaining buttons flattened (no visible background/border by default, just a hover/active tint — overrides the base `.btn` pill look that popovers/modals still use).
+
+**Three-part layout** — `.toolbar-group--left`/`--center`/`--right`:
+```css
+.toolbar-group--left, .toolbar-group--right { flex: 1 1 0; min-width: 0; }
+.toolbar-group--left  { justify-content: flex-start; }
+.toolbar-group--right { justify-content: flex-end; }
+.toolbar-group--center { flex: 0 0 auto; }
+```
+Left and right groups each take an equal share of the remaining space and push their content to their own outer edge, which centers the unstretched, auto-width center group between them regardless of how wide the left/right content is — simpler than an equivalent CSS grid (`1fr auto 1fr`) and keeps `.toolbar`'s existing `flex-wrap` safety net for narrow windows.
+- **Left**: logo + save indicator.
+- **Center**: Undo/Redo (own tight `.undo-redo-group`, 2px gap, separated from the rest by the group's own gap rather than a divider) → `.toolbar-divider` → transport (Play/Stop/time/Speed) → Zoom row. Kept together as one block so it visually centers under the timeline regardless of how wide the left/right groups are.
+- **Right**: Scores, MFA (+ queue dropdown) → `.toolbar-divider` → Export (+ popover), **More** (`⋮`) overflow button.
+
+**`.toolbar-divider`** — a plain 1px `var(--border-ui2)` vertical rule, 28px tall, visually separating sub-clusters within the center and right groups.
+
+**`MoreMenu` component** (new) — an overflow dropdown anchored under the "More ⋮" button, absolutely positioned (`top: 100%; right: 0`) rather than at a click coordinate like the tier/spectrogram right-click menus, reusing `.ctx-menu`'s visual chrome. Holds four controls that used to be standalone toolbar buttons:
+- **⟲ Loop selection** — now a checkbox row instead of a toggle button; the `L` keyboard shortcut and `loopMode`/`loopModeRef` state are unchanged, only the UI entry point moved.
+- **+ Add tier** — opens `TierNamePopover` inline inside the menu item; that wrapper's own `onClick` calls `e.stopPropagation()` so clicking the popover's input/button doesn't bubble up to the row and immediately re-close the menu item.
+- **📄 Load TextGrid** — same `handleTGFile` file input as before, just relocated.
+- **☀/🌙 theme toggle** — now a text row ("Switch to light/dark theme") instead of an icon-only button.
+
+**Undo/Redo** moved from the toolbar's right side into the center group, next to Play/Stop — and their glyphs changed from `↶`/`↷` to `↩`/`↪`, flipped vertically (`transform: scaleY(-1)` on `.btn-undo-redo`) so the hook curves upward per user request; font-size is now 21px (was 20px). See [Undo/Redo](#edit-interactions) below.
+
+**Icon removals** — the MFA button dropped its `⚙` prefix (now plain `"MFA"` / `"⟳ <word> <t0>–<t1>s"` while running); Scores dropped its `◎` prefix (now plain `"Scores"`); Export switched from a literal `↓` character to an inline SVG download-arrow icon. Scores and MFA no longer wrap their label in `<span className="btn-label">` at all, so **Export is now the only button the 1100px icon-collapse breakpoint affects** — the media query itself is unchanged, it just has one remaining subscriber instead of three.
+
+**Stop button** (`■`) gained a `title="Stop"` tooltip — it was previously the only icon-only toolbar control without one.
+
+**Zoom slider** — replaced the native OS `<input type="range">` chrome with a custom thin (3px) track + circular (13px) thumb via `::-webkit-slider-thumb`/`::-moz-range-thumb`, and shrank the `−`/`+` step buttons (`.zoom-step-btn`) to small plain icon buttons, matching the rest of the flattened toolbar.
+
+**Save indicator** — the `● Unsaved` state changed from a pill (background/border/glow) to plain colored text (fixed `#ff9500`, literal in both themes so it reads as "orange" rather than a theme-tinted amber) per user feedback that the pill was too visually loud; `Saving…`/`Saved`/`Save failed` keep their pill treatment.
    - **Gotcha hit while building this**: `.btn-label`'s gap from the icon is a CSS `margin-left`, not a leading space character in the JSX text (i.e. not `<span> Loop</span>`). `.toolbar .btn` is `display: flex`, which makes the icon and the label separate flex items — a leading space *inside* the span's own text sits at the start of that span's own box and gets trimmed by whitespace-collapsing, silently rendering as `"⟲Loop"` instead of `"⟲ Loop"`. Margin-based spacing doesn't have this problem.
 
 **`.zoom-label`** (despite the name) is the shared convention for a small muted inline label placed before a compact toolbar control — used for both `ZOOM` (before the zoom slider) and `Playback speed` (before the playback-rate `<select>`). Prefer it over repeating the label text inside every `<option>` (the old playback-speed dropdown did this — `Playback speed: 1×`, `Playback speed: 1.25×`, etc. — which made the closed `<select>` itself wide and repetitive; the label was pulled out into its own span and the options trimmed to just `1×`, `1.25×`, ...).
@@ -1124,7 +1214,7 @@ This must stay in `index.html`, not move into a React effect — React can't run
 
 **Frozen-dark boundary — do not add theme awareness beyond the table above**: `drawPlayheadLine`, `drawSelectionRect`, `drawSpec` (including its inline frequency-axis drawing), `drawOverlay`, and `drawSnapGuide` remain entirely theme-unaware, as do `src/dsp.js`, `src/specWorker.js`, `scoreColor()` and every call site (tile fills, `ConfidenceDashboard`'s stat values/histogram/lowest-confidence rows), and `ConfidenceDashboard`'s hardcoded gradient legend (mirrors the frozen canvas confidence scale). `drawWave`/`drawTier`/`drawMinimap`/`drawScrollbar`/`drawRuler` themselves are *not* fully off-limits anymore — only their background fill (plus `drawTier`'s tile text and `drawMinimap`'s viewport tint) is in scope, per the exception above; every other color decision inside those five functions is still frozen. The colormap→label-color table inside `drawSpec` (jet=black/inferno=white/viridis=white/greys=black) is about legibility against each *spectrogram colormap*, not the app theme — leave it alone too.
 
-**In scope despite sitting next to canvases**: `.minimap`/`.scrollbar-strip`/`*-gutter` div backgrounds (these are DOM chrome behind/beside the canvas, not `fillStyle` calls) and the `.formant-card`/`.spec-overlay-btns`/`.calc-spec-btn` floating HUD (DOM elements layered over the spectrogram via `backdrop-filter`, not canvas draw calls) — in light mode these render as a light, translucent card floating over the still-dark spectrogram underneath, which is intentional.
+**In scope despite sitting next to canvases**: `.minimap`/`.scrollbar-strip`/`*-gutter` div backgrounds (these are DOM chrome behind/beside the canvas, not `fillStyle` calls) — these are DOM elements, not canvas draw calls, so they already pick up the shared `.ctx-menu`/`--bg-surface`/`--border-surface` tokens like any other popover. (The old `.formant-card`/`.spec-overlay-btns` floating HUD this note used to reference was removed 2026-08-17 — see [Spectrogram right-click menu](#spectrogram-right-click-menu-2026-08-17).)
 
 ---
 
@@ -1256,20 +1346,31 @@ When `/api/public-files` returns more than one `.wav` or `.TextGrid`, the app re
 
 ## Todos
 
-Follow-ups to pick up next session — flag any of these and we can plan/implement from here:
+Follow-ups to pick up next session — flag any of these and we can plan/implement from here. Grouped by rough effort/scope so priorities are easier to scan; the original flat numbering (1–21) is kept as a stable reference across groups.
 
 See also `CODE_REVIEW_FINDINGS.md` (repo root) — a separate simplification/efficiency punch list from a 2026-07-25 review pass covering `App.jsx`, the DSP/MFA backends, and the ASR pipeline. Its dead-code section (unused refs, a dead `commitLabel`/`pushUndo`/`popUndo` duplicate, a no-op `drawFreqAxis` stub, a handful of leftover debug `console.log`s, unused Python imports in `asr/aligner.py`/`asr/textgrid_writer.py`) is fully checked off as of 2026-07-26; the remaining efficiency/duplication items there (the `addTierEditInteraction` snap-boundary recompute, `aligner.py`'s per-segment WAV writes, OOV-match caching, and others) are still open — check that file for current status before starting work, since it's updated independently of this one.
 
+### Quick fixes (docs/UI, low effort)
+
+15. Document how to annotate other languages. `mfa_server.py` already reads `MFA_ACOUSTIC_MODEL`/`MFA_DICTIONARY` env vars and `asr/transcribe.py` already has `--dictionary`/`--acoustic-model` flags for non-English MFA models, but neither USAGE.md nor TRANSCRIPTION.md documents this path.
+20. README: lead with (or clearly split) the Windows/WSL setup path instead of Windows users having to read through mac/Linux-first instructions before reaching the "Windows Note" section — a Windows user reported exactly this confusion, despite the Windows section itself being clear. Also explicitly say to open `http://localhost:5173` in a browser, rather than just stating the URL.
+21. USAGE.md is stale: it still describes an edit-mode "hint bar" at the bottom of the tier area listing shortcuts, but that bar was removed from the app (see [Edit mode hint bar (removed)](#edit-mode-hint-bar-removed)) and its content moved into `ShortcutsPopover`. Update USAGE.md to match.
+
+### Scoped features/fixes (moderate effort)
+
 1. Clarify save behavior — see [Save to Disk](#save-to-disk-ctrlcmds). Does `Ctrl/Cmd+S` silently overwrite the existing TextGrid on disk? If so, show the user a confirmation popup before/when that overwrite happens. Related: there's no toolbar Save button at all — only the small `● Unsaved`/`✓ Saved` status text next to the logo, easy to miss next to the more prominent `↓ Export` button; consider whether the save state needs more visual weight too.
-2. Add pitch (F0) tracking alongside F1/F2/F3 (see [Formant Tracking](#formant-tracking)). `parselmouth`/Praat already has a well-established `Sound.to_pitch()` for this — the recommended path, rather than a new dependency (a `phonlab` LPC/IFC-based tracker was evaluated for its bundled F0 output and rejected: its LPC path is a simpler reimplementation of the same Burg math `parselmouth` already runs as real Praat C++ code, and its IFC alternative is slower and needs a speaker-class guess as input).
+8. Give edit mode a visible on/off indicator — it's on by default (see [Edit Mode](#edit-mode)) but the only way to tell is pressing `1` and watching behavior change; there's no toolbar chrome or mode badge today.
+9. Make the Export popover show its real difference. The Full vs Praat-compatible radio rows in `ExportPopover` both list the same tier set (`WRD + PHN + custom`) as their subtitle — the actual difference is score/edited/`original` metadata (see [TextGrid parsing and serialisation](#textgrid-parsing-and-serialisation)), which isn't visible anywhere in the dialog. While in there, rename `doExportTextGrid`'s `includeCustom` param — it actually sets `praatCompat` (`praatCompat = !includeCustom`), not which tiers get included.
+12. Add click-to-seek to the Confidence Dashboard's lowest-confidence word list (see [Confidence Score Coloring](#confidence-score-coloring)) — currently display-only; clicking a word there could jump the playhead/view to it.
+14. Let the ASR pipeline take an optional reference transcript (`.txt`) of the audio's real text, editable by the user beforehand, and use it to correct/constrain the ASR pass so downstream MFA alignment is more accurate than relying on ASR output alone.
+16. **Tier-name matching for MFA is confusing and has no fix path.** Root-caused 2026-08-17: `loadTextGrid` (`App.jsx`) only recognizes a tier as the built-in Words/Phones tier if its literal name (case-insensitive) is exactly `words` / `phones`|`phonemes`|`phone` — anything else becomes a custom tier, and `handleRunMfa` only ever reads `wordsRef.current`, so MFA silently can't see annotations sitting in a custom tier. The built-in WRD/PHN tier divs always render (even empty) with fixed UI labels "WRD"/"PHN", which don't correspond to the literal tier name the app is matching on — renaming a tier to `WRD` in Praat (matching the on-screen label, not the internal key) creates a second, unrelated custom tier also displayed as "WRD", which is exactly the "two WRD tiers, one empty" report. **Workaround for existing files**: rename the tier in Praat to the literal word `words` (not `WRD`) — and `phones` for phonemes — then reload; the app will pick it up as the real Words/Phones tier and MFA will work. **Real fix, not yet implemented**: add an in-app action (e.g. on the custom tier's controls) to designate/promote an existing custom tier as the Word or Phone tier, and/or let `handleRunMfa`/the MFA button ask which tier to source words from instead of hardcoding `wordsRef`.
+18. Add spectrogram frequency-axis zoom, plus a live frequency readout/crosshair that follows the mouse — currently only the fixed tick labels (100Hz/200Hz/.../8kHz) show frequency, with no way to read an exact value under the cursor.
+
+### Bigger design/investigation work
+
 3. Change playback so Play only plays the currently-visible section of the timeline (like Audacity), rather than the current selection/full-duration behavior — see [Playback](#playback).
 4. If queueing delay from the [persistent DSP worker](#persistent-worker-latency)'s single-process FIFO design shows up in practice (a slow formants request delaying queued spec requests), consider a small worker pool instead of one process — not implemented so far since normal usage (formants requests are manual/occasional) hasn't needed it.
 5. Audit formant tracking accuracy against Praat itself — open the same audio file directly in Praat, generate formants there with matching settings (5500 Hz ceiling, 25ms window, see [Formant Tracking](#formant-tracking)), and compare F1/F2/F3 values at several time points to confirm this app's `dsp_server.py` output actually matches Praat's own numbers now that the edge-padding and frame-grid-jump bugs are fixed.
 6. Add a higher-resolution spectrogram option. Current analysis parameters (`WIN_LENGTH=2048`, `N_FFT=4096`, see [Analysis parameters](#analysis-parameters-matches-audacitys-own-spectrogram-settings-defaults)) are hardcoded to match Audacity's own defaults — investigate whether a sharper/higher-resolution mode is worth adding (e.g. a larger `N_FFT` or a toggle), and what the tradeoffs are (compute cost per `/api/compute-dsp` request, payload size, whether it's needed given the mel-warped display axis already limits perceptible detail at typical zoom levels).
-7. Make undo/redo arrows thicker
-8. Give edit mode a visible on/off indicator — it's on by default (see [Edit Mode](#edit-mode)) but the only way to tell is pressing `1` and watching behavior change; there's no toolbar chrome or mode badge today.
-9. Make the Export popover show its real difference. The Full vs Praat-compatible radio rows in `ExportPopover` both list the same tier set (`WRD + PHN + custom`) as their subtitle — the actual difference is score/edited/`original` metadata (see [TextGrid parsing and serialisation](#textgrid-parsing-and-serialisation)), which isn't visible anywhere in the dialog. While in there, rename `doExportTextGrid`'s `includeCustom` param — it actually sets `praatCompat` (`praatCompat = !includeCustom`), not which tiers get included.
-10. Toolbar consistency pass — the Stop button (`■`) is the only icon-only toolbar control with no `title` tooltip; add one. Also re-audit which controls collapse to icon-only below the 1100px breakpoint (see [Toolbar responsiveness](#toolbar-responsiveness-2026-07-24)) so similar controls behave consistently.
-11. Right-size the loop-selection toast (see [Loop toast](#loop-toast)) — currently much larger (GIF, 5s, bigger type) than the compact MFA error/warning toasts for a comparable amount of information.
-12. Add click-to-seek to the Confidence Dashboard's lowest-confidence word list (see [Confidence Score Coloring](#confidence-score-coloring)) — currently display-only; clicking a word there could jump the playhead/view to it.
-13. Add a tile-color legend to `ShortcutsPopover` (opened via the GSA logo) — it currently only covers keyboard shortcuts and tile-edit hints. Add a short section explaining what each tile color means (confidence gradient, `EDITED_GREEN` for edited/validated words, default word/phone hues, selection highlight — see [Confidence Score Coloring](#confidence-score-coloring)) so users don't have to open the Confidence Dashboard just to learn the color key.
+17. Phoneme tier intervals aren't constrained to their parent word's boundaries and can drift out of sync (seen after loading annotations from another source). Consider clamping/snapping phoneme edits to the enclosing word's `[t0,t1]`, or at least visually flagging phoneme spans that fall outside any word.
+19. Redesign the wav/TextGrid loading flow — the current mix of `public/` auto-load, the `FilePicker` modal, drag-and-drop, and toolbar Load buttons feels inconsistent; plan this out before implementing.

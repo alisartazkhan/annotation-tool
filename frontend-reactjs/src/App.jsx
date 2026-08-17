@@ -5,7 +5,7 @@ import {
   COLORMAPS, inferno,
   buildMelSpectrogram, buildRmsEnvelope,
 } from './dsp.js';
-import { WELCOME_TITLE, WELCOME_TEXT, SHORTCUTS, TILE_EDITING_HINTS } from './shortcuts.js';
+import { WELCOME_TITLE, WELCOME_TEXT, SHORTCUTS, TILE_EDITING_HINTS, TILE_COLOR_LEGEND } from './shortcuts.js';
 
 
 let _nextId = 1;
@@ -269,7 +269,17 @@ function LabelEditorPopover({ editor, onCommit, onClose }) {
 const EDITED_GREEN = [0, 169, 165]; // #00A9A5
 // Words with a perfect (1.0) confidence score get this exact tone instead of the
 // lightened end of the scoreColor() gradient, so they read as clearly "max confidence".
-const SCORE_ONE_GREEN = [0, 200, 50]; // #00C832
+const SCORE_ONE_GREEN = [42, 166, 78]; // #2AA64E
+const DEFAULT_WORD_RGB = [112, 143, 88];
+const DEFAULT_PHONE_RGB = [143, 114, 181];
+
+// Swatch colors for the ShortcutsPopover's tile-color legend (TILE_COLOR_LEGEND in
+// shortcuts.js). word/phone must stay in sync with drawTier's `defaultRgb` literals.
+const TILE_COLOR_SWATCHES = {
+  word: `rgb(${DEFAULT_WORD_RGB.join(',')})`,
+  phone: `rgb(${DEFAULT_PHONE_RGB.join(',')})`,
+  edited: `rgb(${EDITED_GREEN.join(',')})`,
+};
 
 function scoreColorRgb(score) {
   let r = score < 0.5 ? 255 : Math.round(255 * (1 - (score - 0.5) * 2));
@@ -470,6 +480,55 @@ function TierNamePopover({ onAdd, onClose }) {
   );
 }
 
+// Toolbar overflow menu (2026-08-17 toolbar cleanup) — holds the controls that don't
+// need to be visible at a glance: Loop, Add Tier, Load TextGrid, theme toggle. Reuses
+// the `.ctx-menu` visual (border/shadow/surface tokens) but anchors under the "More"
+// button like `.mfa-queue-dropdown`/`.popover-panel` do (position:absolute, not
+// position:fixed at a click coordinate like the tier/spectrogram right-click menus) —
+// the inline style below overrides `.ctx-menu`'s position/left/top for that reason.
+function MoreMenu({
+  onClose,
+  loopMode, onToggleLoop,
+  showTierManager, onOpenTierManager, onAddTier, onCloseTierManager,
+  onLoadTextGrid,
+  theme, onToggleTheme,
+}) {
+  const menuRef = useRef(null);
+  useEffect(() => {
+    const dismiss = (e) => { if (menuRef.current && !menuRef.current.contains(e.target)) onClose(); };
+    document.addEventListener('mousedown', dismiss);
+    return () => document.removeEventListener('mousedown', dismiss);
+  }, [onClose]);
+
+  return (
+    <div ref={menuRef} className="ctx-menu" style={{ position: 'absolute', top: '100%', right: 0, marginTop: 4, minWidth: 180 }}>
+      <label className="ctx-menu__item ctx-menu__checkbox-row">
+        <input type="checkbox" checked={loopMode} onChange={onToggleLoop} />
+        ⟲ Loop selection
+      </label>
+      <div className="ctx-menu__sep" />
+      <div className="ctx-menu__item" style={{ position: 'relative' }} onClick={onOpenTierManager}>
+        + Add tier
+        {showTierManager && (
+          // stopPropagation so clicking the popover's own input/button doesn't bubble
+          // up to the row's onClick above and immediately re-toggle it closed.
+          <div onClick={(e) => e.stopPropagation()}>
+            <TierNamePopover onAdd={onAddTier} onClose={onCloseTierManager} />
+          </div>
+        )}
+      </div>
+      <label className="ctx-menu__item">
+        📄 Load TextGrid
+        <input type="file" accept=".TextGrid,.textgrid" onChange={onLoadTextGrid} style={{ display: 'none' }} />
+      </label>
+      <div className="ctx-menu__sep" />
+      <div className="ctx-menu__item" onClick={() => { onToggleTheme(); onClose(); }}>
+        {theme === 'dark' ? '☀ Switch to light theme' : '🌙 Switch to dark theme'}
+      </div>
+    </div>
+  );
+}
+
 function FilePicker({ wavs, tgs, onSelect }) {
   const [selWav, setSelWav] = useState(wavs[0]);
   const [selTg,  setSelTg]  = useState(tgs[0] || '');
@@ -525,12 +584,102 @@ function FilePicker({ wavs, tgs, onSelect }) {
   );
 }
 
-function ShortcutSectionLabel({ text }) {
+// Renders as a Fragment (not a wrapping element) so the header row and its child rows
+// stay direct children of ShortcutsPopover's 2-column CSS grid — a wrapping <div> would
+// pull `children` out of that grid and break the column alignment.
+function CollapsibleSection({ title, open, onToggle, children }) {
   return (
-    <div style={{
-      gridColumn: '1 / -1', fontSize: 10, fontWeight: 600, color: 'var(--text-mute)',
-      letterSpacing: 0.5, padding: '14px 8px 6px',
-    }}>{text}</div>
+    <>
+      <button
+        type="button"
+        onClick={onToggle}
+        style={{
+          gridColumn: '1 / -1', display: 'flex', alignItems: 'center', gap: 6,
+          width: '100%', background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left',
+          fontSize: 10, fontWeight: 600, color: 'var(--text-mute)',
+          letterSpacing: 0.5, padding: '14px 8px 6px',
+        }}
+      >
+        <span style={{
+          display: 'inline-block', fontSize: 8, transition: 'transform 0.15s',
+          transform: open ? 'rotate(90deg)' : 'rotate(0deg)',
+        }}>▶</span>
+        {title}
+      </button>
+      {open && children}
+    </>
+  );
+}
+
+const SPEC_CTX_COLORMAPS = [
+  ['jet', 'Jet'], ['inferno', 'Inferno'], ['viridis', 'Viridis'], ['greys', 'Greys'],
+];
+// Must match the dot/line colors drawSpec uses for each track (see the tracks/formants
+// arrays there) — this menu's checkbox labels are colored the same so a track's color
+// in the menu tells you which dots/line on the canvas it controls.
+const SPEC_CTX_TRACK_COLORS = { f0: '#f0c828', f1: '#ff5050', f2: '#50dc50', f3: '#5090ff' };
+
+// Right-click menu on the spectrogram — replaces the old always-visible colormap
+// dropdown + Force Refresh/Generate Formants buttons (see HANDOFF.md, "Spectrogram
+// context menu"). Renders as JSX (unlike the tier canvases' imperative
+// document.createElement context menu) since it needs reactive checked/selected state
+// for the checkboxes and colormap radio rows, not just a flat list of one-shot actions.
+function SpecContextMenu({
+  x, y, flip, onClose,
+  colormapName, onColormapChange,
+  formantVisible, onToggleTrack,
+  specComputing, onForceRefreshSpec,
+  formantComputing, onRegenerateFormants,
+}) {
+  const menuRef = useRef(null);
+  useEffect(() => {
+    const dismiss = (e) => { if (menuRef.current && !menuRef.current.contains(e.target)) onClose(); };
+    document.addEventListener('mousedown', dismiss);
+    return () => document.removeEventListener('mousedown', dismiss);
+  }, [onClose]);
+
+  const submenuClass = `ctx-menu__submenu${flip ? ' ctx-menu__submenu--flip' : ''}`;
+
+  const trackCheckbox = (key, label) => (
+    <label key={key} className="ctx-menu__item ctx-menu__checkbox-row">
+      <input type="checkbox" checked={!!formantVisible[key]} onChange={() => onToggleTrack(key)} />
+      <span style={{ color: SPEC_CTX_TRACK_COLORS[key] }}>{label}</span>
+    </label>
+  );
+
+  return (
+    <div ref={menuRef} className="ctx-menu" style={{ left: x, top: y, minWidth: 200 }}>
+      <div className="ctx-menu__item ctx-menu__item--parent">
+        Spectrogram settings
+        <div className={submenuClass}>
+          <div className="ctx-menu__item" onClick={() => { onClose(); onForceRefreshSpec(); }}>
+            {specComputing ? '⟳ Refreshing…' : '↻ Force Refresh'}
+          </div>
+          <div className="ctx-menu__item" onClick={() => { onClose(); onRegenerateFormants(); }}>
+            {formantComputing ? '⟳ Generating…' : '⟳ Regenerate formants & pitch'}
+          </div>
+        </div>
+      </div>
+      <div className="ctx-menu__item ctx-menu__item--parent">
+        Colormap
+        <div className={submenuClass}>
+          {SPEC_CTX_COLORMAPS.map(([name, label]) => (
+            <div key={name} className="ctx-menu__item ctx-menu__radio-row" onClick={() => { onColormapChange(name); onClose(); }}>
+              <span className="ctx-menu__radio">{colormapName === name ? '●' : ''}</span>
+              {label}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="ctx-menu__sep" />
+
+      <div className="ctx-menu__label">Formants</div>
+      {trackCheckbox('f1', 'F1')}
+      {trackCheckbox('f2', 'F2')}
+      {trackCheckbox('f3', 'F3')}
+      {trackCheckbox('f0', 'Pitch (F0)')}
+    </div>
   );
 }
 
@@ -553,7 +702,42 @@ function ShortcutRows({ rows }) {
   ));
 }
 
+function TileColorLegendRows() {
+  return (
+    <>
+      <div style={{ gridColumn: '1 / -1', padding: '4px 8px 8px' }}>
+        <div style={{
+          height: 8, borderRadius: 4, marginBottom: 4,
+          background: `linear-gradient(to right, ${scoreColor(0)}, ${scoreColor(0.5)}, ${scoreColor(1)})`,
+        }} />
+        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: 'var(--text-mute)' }}>
+          <span>Low confidence</span><span>High confidence</span>
+        </div>
+      </div>
+      {TILE_COLOR_LEGEND.map((row, i) => (
+        <React.Fragment key={row.swatchKey}>
+          <div style={{ padding: '6px 8px', background: i % 2 ? 'var(--bg-panel)' : 'transparent', display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ width: 14, height: 14, borderRadius: 3, background: TILE_COLOR_SWATCHES[row.swatchKey], flexShrink: 0, display: 'inline-block' }} />
+            <span style={{ color: 'var(--text)' }}>{row.label}</span>
+          </div>
+          <div style={{ padding: '6px 8px', background: i % 2 ? 'var(--bg-panel)' : 'transparent', color: 'var(--text-dim)', display: 'flex', alignItems: 'center' }}>
+            {row.desc}
+          </div>
+        </React.Fragment>
+      ))}
+      <div style={{ gridColumn: '1 / -1', padding: '6px 8px 0', fontSize: 11, color: 'var(--text-soft)', lineHeight: 1.5 }}>
+        Selecting a tile keeps its color and "pops" it (stronger fill, solid outline) rather than switching to a different color.
+      </div>
+    </>
+  );
+}
+
 function ShortcutsPopover({ onClose }) {
+  // All closed by default so the popover opens compact; the user expands only the
+  // section(s) they want. Independent toggles, not an accordion — any combo can be open.
+  const [openSections, setOpenSections] = useState({ keyboard: false, tiles: false, colors: false });
+  const toggleSection = (key) => setOpenSections(s => ({ ...s, [key]: !s[key] }));
+
   return (
     <div className="shortcuts-popover-panel" style={{ fontFamily: 'Inter,system-ui,sans-serif' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 12 }}>
@@ -572,10 +756,15 @@ function ShortcutsPopover({ onClose }) {
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '150px 1fr', fontSize: 12 }}>
-        <ShortcutSectionLabel text="KEYBOARD" />
-        <ShortcutRows rows={SHORTCUTS} />
-        <ShortcutSectionLabel text="TILE EDITING (EDIT MODE)" />
-        <ShortcutRows rows={TILE_EDITING_HINTS} />
+        <CollapsibleSection title="KEYBOARD" open={openSections.keyboard} onToggle={() => toggleSection('keyboard')}>
+          <ShortcutRows rows={SHORTCUTS} />
+        </CollapsibleSection>
+        <CollapsibleSection title="TILE EDITING (EDIT MODE)" open={openSections.tiles} onToggle={() => toggleSection('tiles')}>
+          <ShortcutRows rows={TILE_EDITING_HINTS} />
+        </CollapsibleSection>
+        <CollapsibleSection title="TILE COLORS" open={openSections.colors} onToggle={() => toggleSection('colors')}>
+          <TileColorLegendRows />
+        </CollapsibleSection>
       </div>
     </div>
   );
@@ -735,16 +924,16 @@ export default function App() {
   const [popup, setPopup]               = useState(null);
   const [dropping, setDropping]         = useState(false);
   const [colormapName, setColormapName] = useState('jet');
-  const [formantVisible, setFormantVisible] = useState({ f1: true, f2: true, f3: true });
+  const [formantVisible, setFormantVisible] = useState({ f0: false, f1: false, f2: false, f3: false });
   const [specComputing, setSpecComputing] = useState(false);
   const [formantComputing, setFormantComputing] = useState(false);
+  const [specCtxMenu, setSpecCtxMenu]   = useState(null); // { x, y, flip } | null — right-click menu on the spectrogram
   const [editMode, setEditMode]         = useState(true);
   const [labelEditor, setLabelEditor]   = useState(null); // { id, tierId, tierType, text, x, y, boxW }
   const [showDashboard, setShowDashboard] = useState(false);
   const [showShortcutsPopover, setShowShortcutsPopover] = useState(false);
-  // Chrome-only theme (toolbar/panels/popovers). drawWave/drawTier also read themeRef for their
-  // background fill (see themeRef below) so the plot backgrounds match the light-theme panel bg;
-  // all other canvas colors (waveform stroke, spectrogram, confidence coloring) stay frozen dark.
+  // Chrome-only theme (toolbar/panels/popovers). A small set of draw* colors also read
+  // themeRef so plot backgrounds/text stay coherent in light mode; see HANDOFF.md.
   const [theme, setTheme] = useState(() => document.documentElement.getAttribute('data-theme') || 'dark');
   const themeRef = useRef(theme);
   const [playbackRate, setPlaybackRate]   = useState(1);
@@ -763,6 +952,7 @@ export default function App() {
   const [selectedTileIds, setSelectedTileIds] = useState(new Set()); // ids of selected tiles (drives rerender)
   const [selectedTierIds, setSelectedTierIds] = useState(new Set()); // tier border highlight
   const [showExportPopover, setShowExportPopover] = useState(false);
+  const [showMoreMenu, setShowMoreMenu] = useState(false);
   const [saveState, setSaveState] = useState(null); // null | 'saving' | 'saved' | 'error'
   const [isDirty, setIsDirty]     = useState(false);
   const savedTextGridRef          = useRef(null);   // serialized baseline after load or save
@@ -827,7 +1017,7 @@ export default function App() {
   const customTierDivRefs = useRef({}); // keyed by tier id — the .tier div element
   const durationRef      = useRef(70);
   const colormapNameRef  = useRef('jet');
-  const formantVisibleRef = useRef({ f1: true, f2: true, f3: true }); // which formant dot-tracks are drawn
+  const formantVisibleRef = useRef({ f0: false, f1: false, f2: false, f3: false }); // which formant/pitch dot-tracks are drawn
   const rmsEnvRef        = useRef(null);
   const formantTrackRef  = useRef(null);
   const editModeRef      = useRef(true);
@@ -967,7 +1157,7 @@ export default function App() {
     if (playingRef.current) return;
     const px = tX(playheadRef.current, w);
     if (px < 0 || px > w) return;
-    ctx.strokeStyle = '#e05a3a'; ctx.lineWidth = 1.5;
+    ctx.strokeStyle = '#3a7bd5'; ctx.lineWidth = 1.5;
     ctx.beginPath(); ctx.moveTo(px, 0); ctx.lineTo(px, h); ctx.stroke();
   }, [tX]);
 
@@ -987,11 +1177,12 @@ export default function App() {
     const { ctx, w, h } = s;
     const { t0, t1 } = viewRef.current;
     const DUR = durationRef.current;
-    ctx.fillStyle = themeRef.current === 'light' ? '#ffffff' : '#0d0d10'; ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = themeRef.current === 'light' ? '#ffffff' : '#070b0f'; ctx.fillRect(0, 0, w, h);
     drawSelectionRect(ctx, w, h, 0.15);
     const mid = h / 2;
 
-    ctx.strokeStyle = 'rgba(255,255,255,0.06)'; ctx.lineWidth = 1;
+    ctx.strokeStyle = themeRef.current === 'light' ? 'rgba(20,24,32,0.12)' : 'rgba(255,255,255,0.10)';
+    ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(0, mid); ctx.lineTo(w, mid); ctx.stroke();
 
     const rawCh = audioBufferRef.current ? audioBufferRef.current.getChannelData(0) : null;
@@ -1010,7 +1201,7 @@ export default function App() {
 
       const isLight = themeRef.current === 'light';
       if (rawCh && samplesPerPx <= 2) {
-        ctx.strokeStyle = isLight ? '#000000' : '#ffffff'; ctx.lineWidth = 1.5;
+        ctx.strokeStyle = isLight ? '#252a32' : '#e8eaee'; ctx.lineWidth = 1.35;
         ctx.beginPath();
         let started = false;
         const steps = Math.max(w, Math.ceil((t1 - t0) * rawLen / DUR));
@@ -1025,7 +1216,7 @@ export default function App() {
         if (samplesPerPx < 0.25) {
           const iA = Math.max(0, Math.floor((t0 / DUR) * rawLen));
           const iB = Math.min(rawLen - 1, Math.ceil((t1 / DUR) * rawLen));
-          ctx.fillStyle = isLight ? '#000000' : '#ffffff';
+          ctx.fillStyle = isLight ? '#252a32' : '#e8eaee';
           for (let i = iA; i <= iB; i++) {
             const t = (i / rawLen) * DUR;
             const x = ((t - t0) / (t1 - t0)) * w;
@@ -1034,7 +1225,7 @@ export default function App() {
           }
         }
       } else if (rawCh && samplesPerPx <= 200) {
-        ctx.fillStyle = isLight ? '#000000' : '#ffffff';
+        ctx.fillStyle = isLight ? '#252a32' : 'rgba(232,234,238,0.92)';
         for (let cx = 0; cx < w; cx++) {
           const tA = t0 + (cx / w) * (t1 - t0);
           const tB = t0 + ((cx + 1) / w) * (t1 - t0);
@@ -1052,7 +1243,7 @@ export default function App() {
         }
         const rms = rmsEnvRef.current;
         if (rms) {
-          ctx.strokeStyle = isLight ? 'rgba(0,0,0,0.6)' : 'rgba(255,255,255,0.6)'; ctx.lineWidth = 1.2;
+          ctx.strokeStyle = isLight ? 'rgba(47,104,196,0.42)' : 'rgba(148,164,184,0.68)'; ctx.lineWidth = 1.2;
           for (const sign of [-1, 1]) {
             ctx.beginPath(); let started = false;
             for (let cx = 0; cx < w; cx++) {
@@ -1067,7 +1258,7 @@ export default function App() {
       } else {
         const peakData = data || new Float32Array(0);
         const N = peakData.length;
-        ctx.fillStyle = isLight ? '#000000' : '#ffffff';
+        ctx.fillStyle = isLight ? '#252a32' : 'rgba(232,234,238,0.92)';
         for (let cx = 0; cx < w; cx++) {
           const tA = t0 + (cx / w) * (t1 - t0);
           const idx = Math.max(0, Math.min(N - 1, Math.floor((tA / DUR) * N)));
@@ -1084,7 +1275,7 @@ export default function App() {
     if (!s) return;
     const { ctx, w, h } = s;
     const { t0, t1 } = viewRef.current;
-    ctx.fillStyle = '#090910'; ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = '#06090d'; ctx.fillRect(0, 0, w, h);
     const sp = spectroRef.current;
     const dpr = window.devicePixelRatio || 1;
     const pw = Math.round(w * dpr);
@@ -1114,7 +1305,7 @@ export default function App() {
       blitStrip(base);
     } else if (!sp) {
       // No spectrogram data at all — show hint
-      ctx.fillStyle = '#3a3a4a';
+      ctx.fillStyle = '#657082';
       ctx.font = '13px Inter,sans-serif';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
@@ -1126,20 +1317,47 @@ export default function App() {
     {
       const ft = formantTrackRef.current;
       const fv = formantVisibleRef.current;
-      if (ft && Array.isArray(ft.times) && (fv.f1 || fv.f2 || fv.f3)) {
+      if (ft && Array.isArray(ft.times) && (fv.f0 || fv.f1 || fv.f2 || fv.f3)) {
         const FMAX = Math.min(8000, ft.sr / 2);
         const melMax = 2595 * Math.log10(1 + FMAX / 700);
         const hzToMelY = (hz) => h - (2595 * Math.log10(1 + hz / 700) / melMax) * h;
+
+        // F0 (pitch) is drawn as a connected line — the conventional way to show a
+        // pitch contour (matches Praat's own Sound+Pitch view) — broken into separate
+        // subpaths at each unvoiced frame (hz=0) so voicing gaps don't get bridged by
+        // a straight line. This uses its own frame grid (`ft.timesF0`), independent of
+        // the formant frames' `times` below — see the pitch-tracking writeup in
+        // HANDOFF.md for why "To Pitch" and "To Formant (burg)" don't share a grid.
+        if (fv.f0 && ft.f0 && ft.timesF0) {
+          ctx.strokeStyle = 'rgba(240,200,40,0.9)';
+          ctx.lineWidth = 2;
+          let drawing = false;
+          for (let i = 0; i < ft.timesF0.length; i++) {
+            const t = ft.timesF0[i];
+            if (t < t0 || t > t1) continue;
+            const hz = ft.f0[i];
+            if (!hz) { // 0 = unvoiced — end the current segment, if any
+              if (drawing) { ctx.stroke(); drawing = false; }
+              continue;
+            }
+            const x = tX(t, w);
+            const y = hzToMelY(hz);
+            if (!drawing) { ctx.beginPath(); ctx.moveTo(x, y); drawing = true; }
+            else { ctx.lineTo(x, y); }
+          }
+          if (drawing) ctx.stroke();
+        }
+
+        // F1/F2/F3 stay as a Praat-style scatter: one dot per actual analysis frame
+        // (not one per pixel column) — draws only the frames that fall in the current
+        // view, so dots naturally thin out when zoomed in and cluster when zoomed out,
+        // matching Praat's own formant-track rendering instead of interpolating a line.
         const DOT_R = 3;
         const formants = [
           ['f1', ft.f1, 'rgba(255,80,80,0.85)'],
           ['f2', ft.f2, 'rgba(80,220,80,0.85)'],
           ['f3', ft.f3, 'rgba(80,140,255,0.85)'],
         ];
-        // Praat-style scatter: one dot per actual analysis frame (not one per pixel
-        // column) — draws only the frames that fall in the current view, so dots
-        // naturally thin out when zoomed in and cluster when zoomed out, matching
-        // Praat's own formant-track rendering instead of interpolating a line.
         for (const [key, fdata, color] of formants) {
           if (!fv[key] || !fdata) continue;
           ctx.fillStyle = color;
@@ -1163,18 +1381,18 @@ export default function App() {
     const FMAX = 8000;
     const melMax = 2595 * Math.log10(1 + FMAX / 700);
     const ticks = [100, 200, 500, 1000, 2000, 4000, 8000];
-    ctx.font = "9px 'JetBrains Mono',monospace";
+    ctx.font = "10px 'JetBrains Mono',monospace";
     ctx.textAlign = 'left';
     for (const hz of ticks) {
       const melHz = 2595 * Math.log10(1 + hz / 700);
       const y = Math.round(h - (melHz / melMax) * h) + 0.5;
-      ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+      ctx.strokeStyle = 'rgba(255,255,255,0.07)';
       ctx.lineWidth = 1;
       ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
-      const label = hz >= 1000 ? `${hz / 1000}k` : `${hz}`;
+      const label = hz >= 1000 ? `${hz / 1000} kHz` : `${hz} Hz`;
       ctx.shadowColor = shadowColor; ctx.shadowBlur = 3;
       ctx.fillStyle = labelColor;
-      ctx.fillText(label, 3, Math.max(9, y - 2));
+      ctx.fillText(label, 8, Math.max(11, y - 2));
       ctx.shadowBlur = 0;
     }
 
@@ -1186,13 +1404,14 @@ export default function App() {
     if (!s) return;
     const { ctx, w, h } = s;
     const { t0, t1 } = viewRef.current;
-    ctx.fillStyle = themeRef.current === 'light' ? '#ffffff' : '#13131a'; ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = themeRef.current === 'light' ? '#ffffff' : '#0d1015'; ctx.fillRect(0, 0, w, h);
     const span = t1 - t0, pxPerSec = w / span;
     const steps = [0.1, 0.25, 0.5, 1, 2, 5, 10, 30];
     const step = steps.find(st => st * pxPerSec >= 70) || 30;
     const first = Math.ceil(t0 / step) * step;
-    ctx.fillStyle = '#45454d'; ctx.font = "9px 'JetBrains Mono',monospace"; ctx.textAlign = 'center';
-    ctx.strokeStyle = '#2a2a30'; ctx.lineWidth = 1;
+    ctx.fillStyle = themeRef.current === 'light' ? '#69707c' : '#858b96';
+    ctx.font = "10px 'JetBrains Mono',monospace"; ctx.textAlign = 'center';
+    ctx.strokeStyle = themeRef.current === 'light' ? '#d8dde5' : '#2a3038'; ctx.lineWidth = 1;
     for (let t = first; t <= t1 + step; t = +(t + step).toFixed(6)) {
       const x = Math.round(tX(t, w));
       ctx.beginPath(); ctx.moveTo(x, h - 6); ctx.lineTo(x, h); ctx.stroke();
@@ -1208,7 +1427,7 @@ export default function App() {
     if (!s) return;
     const { ctx, w, h } = s;
     const { t0, t1 } = viewRef.current;
-    ctx.fillStyle = themeRef.current === 'light' ? '#ffffff' : '#13131a'; ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = themeRef.current === 'light' ? '#ffffff' : '#0d1015'; ctx.fillRect(0, 0, w, h);
     const sel = selectionRef.current;
     if (sel) {
       const sx = tX(sel.t0, w), ex = tX(sel.t1, w);
@@ -1221,8 +1440,8 @@ export default function App() {
     const inEdit = editModeRef.current;
     // Default tier chrome (no score / not edited). Selection brightens these same RGBs
     // rather than swapping to a fixed accent color.
-    const defaultRgb  = isWord ? [58, 123, 213] : [170, 130, 220];
-    const strokeColor = rgbaFromRgb(defaultRgb, isWord ? 0.45 : 0.4); // hover-edge restore
+    const defaultRgb  = isWord ? DEFAULT_WORD_RGB : DEFAULT_PHONE_RGB;
+    const strokeColor = rgbaFromRgb(defaultRgb, isWord ? 0.58 : 0.52); // hover-edge restore
     const fontSize    = Math.round(Math.max(11, Math.min(24, rowH * 0.45)) * fontScaleRef.current);
     const font        = isWord ? `500 ${fontSize}px Inter,sans-serif` : `${Math.max(10, fontSize - 1)}px 'JetBrains Mono',monospace`;
     const hoverEdge   = hoverEdgeRef.current;
@@ -1253,25 +1472,27 @@ export default function App() {
       let fillAlpha;
       let strokeAlpha;
       if (kind === 'default') {
-        fillAlpha = isSelected ? 0.55 : (inEdit ? (isWord ? 0.30 : 0.28) : (isWord ? 0.18 : 0.15));
-        strokeAlpha = isSelected ? 1 : (isWord ? 0.45 : 0.4);
+        fillAlpha = isSelected ? 0.78 : (inEdit ? (isWord ? 0.70 : 0.66) : (isWord ? 0.54 : 0.50));
+        strokeAlpha = isSelected ? 1 : (isWord ? 0.76 : 0.68);
       } else {
-        fillAlpha = isSelected ? 0.55 : (inEdit ? 0.40 : 0.28);
+        fillAlpha = isSelected ? 0.78 : (inEdit ? 0.68 : 0.54);
         strokeAlpha = (isSelected || kind === 'solid') ? 1 : 0.75;
       }
       const fill = rgbaFromRgb(rgb, fillAlpha);
       const stroke = rgbaFromRgb(rgb, strokeAlpha);
+      const tilePadY = Math.max(4, Math.min(9, rowH * 0.16));
+      const tileH = Math.max(1, rowH - tilePadY * 2);
       ctx.fillStyle = fill;
-      ctx.fillRect(x0, ry + 2, bw, rowH - 4);
+      ctx.fillRect(x0 + 1, ry + tilePadY, Math.max(0, bw - 2), tileH);
       ctx.strokeStyle = stroke; ctx.lineWidth = isSelected ? 2 : (inEdit ? 1.5 : 1);
-      ctx.strokeRect(x0 + 0.5, ry + 2.5, bw - 1, rowH - 5);
+      ctx.strokeRect(x0 + 1.5, ry + tilePadY + 0.5, Math.max(0, bw - 3), Math.max(0, tileH - 1));
 
       if (inEdit) {
         const isHovered = hoverEdge && hoverEdge.id === item.id;
         if (isHovered) {
           const hx = hoverEdge.side === 'left' ? x0 : x1;
           ctx.strokeStyle = '#f0c040'; ctx.lineWidth = 2.5;
-          ctx.beginPath(); ctx.moveTo(hx, ry + 2); ctx.lineTo(hx, ry + rowH - 2); ctx.stroke();
+          ctx.beginPath(); ctx.moveTo(hx, ry + tilePadY); ctx.lineTo(hx, ry + rowH - tilePadY); ctx.stroke();
           ctx.strokeStyle = strokeColor; ctx.lineWidth = 1.5;
         }
       }
@@ -1279,7 +1500,7 @@ export default function App() {
       if (bw > 8) {
         ctx.save();
         ctx.beginPath(); ctx.rect(x0 + 1, ry, bw - 2, rowH); ctx.clip();
-        ctx.fillStyle = themeRef.current === 'light' ? '#1c1c20' : '#c8c6c1'; ctx.font = font; ctx.textAlign = 'center';
+        ctx.fillStyle = themeRef.current === 'light' ? '#1c1c20' : '#05070a'; ctx.font = font; ctx.textAlign = 'center';
         ctx.fillText(item.text, (x0 + x1) / 2, ry + rowH / 2 + fontSize * 0.35);
         ctx.restore();
       }
@@ -1294,7 +1515,7 @@ export default function App() {
     const DUR = durationRef.current;
     const { t0, t1 } = viewRef.current;
     const isLight = themeRef.current === 'light';
-    ctx.fillStyle = isLight ? '#ffffff' : '#0c0c0f'; ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = isLight ? '#ffffff' : '#080b0f'; ctx.fillRect(0, 0, w, h);
     for (const wd of wordsRef.current) {
       ctx.fillStyle = wd.edited ? `rgba(${EDITED_GREEN.join(',')},0.55)`
                     : wd.score === 1 ? `rgba(${SCORE_ONE_GREEN.join(',')},0.55)`
@@ -1303,10 +1524,10 @@ export default function App() {
     }
     const vx0 = (t0 / DUR) * w, vx1 = (t1 / DUR) * w;
     ctx.fillStyle = isLight ? 'rgba(0,0,0,0.06)' : 'rgba(255,255,255,0.06)'; ctx.fillRect(vx0, 0, vx1 - vx0, h);
-    ctx.strokeStyle = '#45454d'; ctx.lineWidth = 1;
+    ctx.strokeStyle = isLight ? '#a6adba' : '#6f7784'; ctx.lineWidth = 1.2;
     ctx.strokeRect(vx0 + 0.5, 0.5, vx1 - vx0 - 1, h - 1);
     const px = (playheadRef.current / DUR) * w;
-    ctx.strokeStyle = '#e05a3a'; ctx.lineWidth = 1.5;
+    ctx.strokeStyle = '#3a7bd5'; ctx.lineWidth = 1.5;
     ctx.beginPath(); ctx.moveTo(px, 0); ctx.lineTo(px, h); ctx.stroke();
   }, []);
 
@@ -1316,10 +1537,10 @@ export default function App() {
     const { ctx, w, h } = s;
     const DUR = durationRef.current;
     const { t0, t1 } = viewRef.current;
-    ctx.fillStyle = themeRef.current === 'light' ? '#ffffff' : '#0c0c0f'; ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = themeRef.current === 'light' ? '#ffffff' : '#080b0f'; ctx.fillRect(0, 0, w, h);
     if (!DUR) return;
     const vx0 = (t0 / DUR) * w, vx1 = (t1 / DUR) * w;
-    ctx.fillStyle = '#3a3a42';
+    ctx.fillStyle = themeRef.current === 'light' ? '#9aa3b2' : '#535b66';
     ctx.fillRect(Math.max(0, vx0), 2, Math.max(4, vx1 - vx0), h - 4);
   }, []);
 
@@ -1327,7 +1548,7 @@ export default function App() {
     const ov = overlayCanvasRef.current;
     const tl = timelineRef.current;
     if (!ov || !tl) return;
-    const GUTTER = 56;
+    const GUTTER = 64;
     const dpr = window.devicePixelRatio || 1;
     const tw = tl.offsetWidth, th = tl.offsetHeight;
     if (ov.width !== Math.round(tw * dpr) || ov.height !== Math.round(th * dpr)) {
@@ -1341,7 +1562,7 @@ export default function App() {
     ctx.clearRect(0, 0, tw, th);
     const px = GUTTER + tX(playheadRef.current, tw - GUTTER);
     if (px >= GUTTER && px <= tw) {
-      ctx.strokeStyle = '#e05a3a'; ctx.lineWidth = 1.5;
+      ctx.strokeStyle = '#3a7bd5'; ctx.lineWidth = 1.5;
       ctx.beginPath(); ctx.moveTo(px, 0); ctx.lineTo(px, th); ctx.stroke();
     }
   }, [tX]);
@@ -1383,14 +1604,6 @@ export default function App() {
     formantVisibleRef.current = next;
     setFormantVisible(next);
     drawSpec(); // only the spectrogram canvas draws formant dots
-  }, [drawSpec]);
-
-  const toggleAllFormants = useCallback(() => {
-    const allOn = formantVisibleRef.current.f1 && formantVisibleRef.current.f2 && formantVisibleRef.current.f3;
-    const next = { f1: !allOn, f2: !allOn, f3: !allOn };
-    formantVisibleRef.current = next;
-    setFormantVisible(next);
-    drawSpec();
   }, [drawSpec]);
 
   // Returns all tier items as { id, items } excluding the given set of tier ids
@@ -1636,8 +1849,13 @@ export default function App() {
 
   useEffect(() => { scheduleSpecPrefetchRef.current = scheduleSpecPrefetch; }, [scheduleSpecPrefetch]);
 
-  const calcFormantForView = useCallback(async () => {
-    if (!audioBufferRef.current || !publicWavFileRef.current) return;
+  // Fetches formants + pitch for the current view into formantTrackRef, with no
+  // visibility side effects — shared by calcFormantForView (explicit "Regenerate",
+  // which does want to flip visibility) and toggleSpecTrack (a checkbox click, which
+  // should only ever affect the one track the user clicked). Returns whether it fetched
+  // successfully, so callers can bail out on failure without duplicating the try/catch.
+  const fetchFormantData = useCallback(async () => {
+    if (!audioBufferRef.current || !publicWavFileRef.current) return false;
     setFormantComputing(true);
     const { t0, t1 } = viewRef.current;
     try {
@@ -1659,21 +1877,36 @@ export default function App() {
       // already keeps spectroCacheRef populated; overwriting it with this request's
       // un-widened, un-scaled strip would clobber a wider prefetched buffer, so this
       // request never asks the server to compute one in the first place.
-
-      // If the user had toggled every formant off, a fresh generate should show them again.
-      const fv = formantVisibleRef.current;
-      if (!fv.f1 && !fv.f2 && !fv.f3) {
-        const next = { f1: true, f2: true, f3: true };
-        formantVisibleRef.current = next;
-        setFormantVisible(next);
-      }
-      drawSpec();
+      return true;
     } catch (e) {
-      console.error('[calcFormantForView]', e);
+      console.error('[fetchFormantData]', e);
+      return false;
     } finally {
       setFormantComputing(false);
     }
-  }, [drawSpec]);
+  }, []);
+
+  // "Regenerate formants & pitch" (Spectrogram settings submenu) — always re-fetches
+  // for the current view and shows every track, regardless of prior toggle state.
+  const calcFormantForView = useCallback(async () => {
+    const ok = await fetchFormantData();
+    if (!ok) return;
+    const next = { f0: true, f1: true, f2: true, f3: true };
+    formantVisibleRef.current = next;
+    setFormantVisible(next);
+    drawSpec();
+  }, [fetchFormantData, drawSpec]);
+
+  // A Formants/Pitch checkbox click (spectrogram right-click menu) — fetches once, the
+  // first time any track is requested for the current view, then only ever toggles the
+  // one track the user clicked (never forces the others on/off).
+  const toggleSpecTrack = useCallback(async (key) => {
+    if (!formantTrackRef.current) {
+      const ok = await fetchFormantData();
+      if (!ok) return;
+    }
+    toggleFormant(key);
+  }, [fetchFormantData, toggleFormant]);
 
   // ── Audio context ─────────────────────────────────────────────────────
   const getAudioCtx = () => {
@@ -1797,7 +2030,7 @@ export default function App() {
         if (loopModeRef.current && sel && playingRef.current) {
           setLoopToast(true);
           clearTimeout(loopToastTimerRef.current);
-          loopToastTimerRef.current = setTimeout(() => setLoopToast(false), 5000);
+          loopToastTimerRef.current = setTimeout(() => setLoopToast(false), 2000);
           startPlay(sel.t0);
           return;
         }
@@ -3059,6 +3292,19 @@ export default function App() {
     fetchOverviewChunk(getChunkIndex(t0));
   }, [calcBaseSpec, drawSpec, computePaddedWindow, fetchEnhancedSpec, fetchOverviewChunk]);
 
+  // Estimated menu/submenu footprint used to keep the spectrogram context menu (and its
+  // flyout submenus) from opening off-screen near the right/bottom edge of the viewport.
+  const SPEC_CTX_MENU_W = 260;
+  const SPEC_CTX_MENU_H = 300;
+  const handleSpecContextMenu = useCallback((e) => {
+    e.preventDefault();
+    setSpecCtxMenu({
+      x: e.clientX,
+      y: Math.min(e.clientY, window.innerHeight - SPEC_CTX_MENU_H),
+      flip: e.clientX > window.innerWidth - SPEC_CTX_MENU_W, // open submenus leftward near the right edge
+    });
+  }, []);
+
   const handleAudioFile = (e) => { if (e.target.files[0]) loadAudio(e.target.files[0]); };
   const handleTGFile    = (e) => {
     const f = e.target.files[0]; if (!f) return;
@@ -3388,234 +3634,253 @@ export default function App() {
       )}
 
       <div className="toolbar">
-        <div className="logo">
-          <button
-            type="button"
-            className="logo-btn"
-            onClick={() => setShowShortcutsPopover(v => !v)}
-            title="Keyboard shortcuts"
-          >
-            GSA
-          </button>
-          {isDirty && !saveState && (
-            <span className="save-indicator save-indicator--unsaved">● Unsaved</span>
-          )}
-          {saveState && (
-            <span className={`save-indicator save-indicator--${saveState}`}>
-              {saveState === 'saving' ? '⟳ Saving…' : saveState === 'saved' ? '✓ Saved' : '✕ Save failed'}
-            </span>
-          )}
-          {showShortcutsPopover && (
-            <ShortcutsPopover onClose={() => setShowShortcutsPopover(false)} />
-          )}
-        </div>
-        <div className="spacer" />
-        <div className="transport">
-          <button className={`btn${loopMode ? ' active' : ''}`} onClick={() => { const n = !loopModeRef.current; loopModeRef.current = n; setLoopMode(n); }} title="Loop selection (L)">
-            ⟲<span className="btn-label">Loop</span>
-          </button>
-          <button
-            className={`btn btn-play${playing ? ' paused' : ''}`}
-            onClick={() => {
-              if (playing) {
-                stopPlay();
-              } else if (audioBufferRef.current) {
-                const sel = selectionRef.current;
-                startPlay(sel ? sel.t0 : playheadRef.current);
-              } else {
-                alert('Place a .wav file in public/ and reload the page.');
-              }
-            }}
-            title={playing ? 'Pause (Space)' : 'Play (Space)'}
-          >{playing ? '⏸' : '▶'}</button>
-          <button className="btn" onClick={() => { stopPlay(); playheadRef.current = 0; updateTimeDisplay(); redraw(); }}>■</button>
-          <div className="time-display" ref={timeDisplayRef}>
-            {fmtTime(playheadRef.current)} / {fmtTime(duration)}
+        <div className="toolbar-group toolbar-group--left">
+          <div className="logo">
+            <button
+              type="button"
+              className="logo-btn"
+              onClick={() => setShowShortcutsPopover(v => !v)}
+              title="Keyboard shortcuts"
+            >
+              GSA
+            </button>
+            {isDirty && !saveState && (
+              <span className="save-indicator save-indicator--unsaved">● Unsaved</span>
+            )}
+            {saveState && (
+              <span className={`save-indicator save-indicator--${saveState}`}>
+                {saveState === 'saving' ? '⟳ Saving…' : saveState === 'saved' ? '✓ Saved' : '✕ Save failed'}
+              </span>
+            )}
+            {showShortcutsPopover && (
+              <ShortcutsPopover onClose={() => setShowShortcutsPopover(false)} />
+            )}
           </div>
-          <span className="zoom-label">SPEED</span>
-          <select
-            className="colormap-select"
-            value={playbackRate}
-            onChange={e => {
-              const r = parseFloat(e.target.value);
-              playbackRateRef.current = r;
-              setPlaybackRate(r);
-              if (playingRef.current) {
-                const ph = playheadRef.current;
-                stopPlay();
-                startPlay(ph);
-              }
-            }}
-            title="Playback speed"
-          >
-            {[0.25, 0.5, 0.75, 1, 1.25, 1.5, 2].map(r => (
-              <option key={r} value={r}>{r}×</option>
-            ))}
-          </select>
         </div>
-        <div className="zoom-row">
-          <span className="zoom-label">ZOOM</span>
-          <button
-            type="button"
-            className="btn zoom-step-btn"
-            onClick={() => adjustTimelineZoom(-1)}
-            disabled={zoomValue <= 0}
-            title="Zoom timeline out"
-            aria-label="Zoom timeline out"
-          >
-            −
-          </button>
-          <input type="range" min="0" max="100" value={zoomValue} onChange={e => handleZoom(+e.target.value)} title="Zoom level" />
-          <button
-            type="button"
-            className="btn zoom-step-btn"
-            onClick={() => adjustTimelineZoom(1)}
-            disabled={zoomValue >= 100}
-            title="Zoom timeline in"
-            aria-label="Zoom timeline in"
-          >
-            +
-          </button>
+
+        <div className="toolbar-group toolbar-group--center">
+          <div className="undo-redo-group">
+            <button
+              className="btn btn-undo-redo"
+              onClick={() => { popUndo(); redraw(); }}
+              disabled={undoStackRef.current.length === 0}
+              title="Undo (Ctrl/Cmd+Z)"
+            >
+              ↩
+            </button>
+            <button
+              className="btn btn-undo-redo"
+              onClick={() => { popRedo(); redraw(); }}
+              disabled={redoCount === 0}
+              title="Redo (Ctrl/Cmd+Y)"
+              style={{ opacity: redoCount === 0 ? 0.4 : 1 }}
+            >
+              ↪
+            </button>
+          </div>
+
+          <div className="toolbar-divider" />
+
+          <div className="transport">
+            <button
+              className={`btn btn-play${playing ? ' paused' : ''}`}
+              onClick={() => {
+                if (playing) {
+                  stopPlay();
+                } else if (audioBufferRef.current) {
+                  const sel = selectionRef.current;
+                  startPlay(sel ? sel.t0 : playheadRef.current);
+                } else {
+                  alert('Place a .wav file in public/ and reload the page.');
+                }
+              }}
+              title={playing ? 'Pause (Space)' : 'Play (Space)'}
+            >{playing ? '⏸' : '▶'}</button>
+            <button className="btn" onClick={() => { stopPlay(); playheadRef.current = 0; updateTimeDisplay(); redraw(); }} title="Stop">■</button>
+            <div className="time-display" ref={timeDisplayRef}>
+              {fmtTime(playheadRef.current)} / {fmtTime(duration)}
+            </div>
+            <select
+              className="colormap-select"
+              value={playbackRate}
+              onChange={e => {
+                const r = parseFloat(e.target.value);
+                playbackRateRef.current = r;
+                setPlaybackRate(r);
+                if (playingRef.current) {
+                  const ph = playheadRef.current;
+                  stopPlay();
+                  startPlay(ph);
+                }
+              }}
+              title="Playback speed"
+            >
+              {[0.25, 0.5, 0.75, 1, 1.25, 1.5, 2].map(r => (
+                <option key={r} value={r}>{r}×</option>
+              ))}
+            </select>
+          </div>
+
+          <div className="zoom-row">
+            <button
+              type="button"
+              className="btn zoom-step-btn"
+              onClick={() => adjustTimelineZoom(-1)}
+              disabled={zoomValue <= 0}
+              title="Zoom timeline out"
+              aria-label="Zoom timeline out"
+            >
+              −
+            </button>
+            <input type="range" min="0" max="100" value={zoomValue} onChange={e => handleZoom(+e.target.value)} title="Zoom level" />
+            <button
+              type="button"
+              className="btn zoom-step-btn"
+              onClick={() => adjustTimelineZoom(1)}
+              disabled={zoomValue >= 100}
+              title="Zoom timeline in"
+              aria-label="Zoom timeline in"
+            >
+              +
+            </button>
+          </div>
         </div>
-        <button
-          className={`btn${showDashboard ? ' active' : ''}`}
-          onClick={() => setShowDashboard(v => !v)}
-          title="Toggle confidence score distribution panel"
-        >
-          ◎<span className="btn-label">Scores</span>
-        </button>
-        {/* ── MFA button + queue dropdown ───────────────────────────── */}
-        {(() => {
-          const running = mfaQueue.find(j => j.status === 'running');
-          const pending = mfaQueue.filter(j => j.status === 'pending');
-          const busy    = !!running;
-          const queueCount = pending.length + (running ? 1 : 0);
-          const label = running
-            ? `⟳ ${running.label} ${running.segT0.toFixed(1)}–${running.segT1.toFixed(1)}s`
-            : '⚙ MFA';
-          return (
-            <div style={{ position: 'relative' }}>
-              <div style={{ display: 'flex' }}>
-                <button
-                  className={`btn btn-mfa${busy ? ' computing' : ''}`}
-                  onClick={handleRunMfa}
-                  title="Run MFA on current selection"
-                  style={{ borderRadius: queueCount > 0 ? '6px 0 0 6px' : 6, borderRight: queueCount > 0 ? 'none' : undefined, maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-                >
-                  {label}
-                </button>
-                {queueCount > 0 && (
-                  <button
-                    className={`btn btn-mfa${busy ? ' computing' : ''}`}
-                    onClick={() => setMfaQueueOpen(v => !v)}
-                    title="Show MFA queue"
-                    style={{ borderRadius: '0 6px 6px 0', padding: '0 8px', borderLeft: '1px solid rgba(var(--mfa-rgb),0.2)' }}
-                  >
-                    {queueCount}▾
-                  </button>
-                )}
-              </div>
-              {mfaQueueOpen && mfaQueue.length > 0 && (
-                <div
-                  className="mfa-queue-dropdown"
-                  onMouseLeave={() => setMfaQueueOpen(false)}
-                >
-                  {mfaQueue.map((job, i) => (
-                    <div key={job.id} style={{
-                      display: 'flex', alignItems: 'center', gap: 8,
-                      padding: '5px 12px',
-                      borderBottom: i < mfaQueue.length - 1 ? '1px solid var(--border)' : 'none',
-                    }}>
-                      <span style={{ fontSize: 11, color: job.status === 'running' ? 'var(--warn-computing)' : job.status === 'error' ? 'var(--error-text)' : 'var(--text-mute)', flexShrink: 0 }}>
-                        {job.status === 'running' ? '⟳' : job.status === 'error' ? '✕' : '○'}
-                      </span>
-                      <span style={{ flex: 1, fontSize: 11, color: 'var(--text-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {job.label}
-                      </span>
-                      <span style={{ fontSize: 10, fontFamily: "'JetBrains Mono',monospace", color: 'var(--text-dark)', flexShrink: 0 }}>
-                        {job.segT0.toFixed(1)}–{job.segT1.toFixed(1)}s
-                      </span>
-                      {(job.status === 'pending' || job.status === 'error') && (
-                        <button
-                          onClick={() => updateQueue(q => q.filter(j => j.id !== job.id))}
-                          style={{ background: 'none', border: 'none', color: 'var(--text-dark)', cursor: 'pointer', padding: 0, fontSize: 13, lineHeight: 1, flexShrink: 0 }}
-                          title="Remove"
-                        >×</button>
-                      )}
+
+        <div className="toolbar-group toolbar-group--right">
+          <div className="toolbar-group">
+            <button
+              className={`btn${showDashboard ? ' active' : ''}`}
+              onClick={() => setShowDashboard(v => !v)}
+              title="Toggle confidence score distribution panel"
+            >
+              Scores
+            </button>
+            {/* ── MFA button + queue dropdown ───────────────────────────── */}
+            {(() => {
+              const running = mfaQueue.find(j => j.status === 'running');
+              const pending = mfaQueue.filter(j => j.status === 'pending');
+              const busy    = !!running;
+              const queueCount = pending.length + (running ? 1 : 0);
+              const label = running
+                ? `⟳ ${running.label} ${running.segT0.toFixed(1)}–${running.segT1.toFixed(1)}s`
+                : 'MFA';
+              return (
+                <div style={{ position: 'relative' }}>
+                  <div style={{ display: 'flex' }}>
+                    <button
+                      className={`btn btn-mfa${busy ? ' computing' : ''}`}
+                      onClick={handleRunMfa}
+                      title="Run MFA on current selection"
+                      style={{ borderRadius: queueCount > 0 ? '6px 0 0 6px' : 6, borderRight: queueCount > 0 ? 'none' : undefined, maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                    >
+                      {label}
+                    </button>
+                    {queueCount > 0 && (
+                      <button
+                        className={`btn btn-mfa${busy ? ' computing' : ''}`}
+                        onClick={() => setMfaQueueOpen(v => !v)}
+                        title="Show MFA queue"
+                        style={{ borderRadius: '0 6px 6px 0', padding: '0 8px', borderLeft: '1px solid rgba(var(--mfa-rgb),0.2)' }}
+                      >
+                        {queueCount}▾
+                      </button>
+                    )}
+                  </div>
+                  {mfaQueueOpen && mfaQueue.length > 0 && (
+                    <div
+                      className="mfa-queue-dropdown"
+                      onMouseLeave={() => setMfaQueueOpen(false)}
+                    >
+                      {mfaQueue.map((job, i) => (
+                        <div key={job.id} style={{
+                          display: 'flex', alignItems: 'center', gap: 8,
+                          padding: '5px 12px',
+                          borderBottom: i < mfaQueue.length - 1 ? '1px solid var(--border)' : 'none',
+                        }}>
+                          <span style={{ fontSize: 11, color: job.status === 'running' ? 'var(--warn-computing)' : job.status === 'error' ? 'var(--error-text)' : 'var(--text-mute)', flexShrink: 0 }}>
+                            {job.status === 'running' ? '⟳' : job.status === 'error' ? '✕' : '○'}
+                          </span>
+                          <span style={{ flex: 1, fontSize: 11, color: 'var(--text-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {job.label}
+                          </span>
+                          <span style={{ fontSize: 10, fontFamily: "'JetBrains Mono',monospace", color: 'var(--text-dark)', flexShrink: 0 }}>
+                            {job.segT0.toFixed(1)}–{job.segT1.toFixed(1)}s
+                          </span>
+                          {(job.status === 'pending' || job.status === 'error') && (
+                            <button
+                              onClick={() => updateQueue(q => q.filter(j => j.id !== job.id))}
+                              style={{ background: 'none', border: 'none', color: 'var(--text-dark)', cursor: 'pointer', padding: 0, fontSize: 13, lineHeight: 1, flexShrink: 0 }}
+                              title="Remove"
+                            >×</button>
+                          )}
+                        </div>
+                      ))}
                     </div>
-                  ))}
+                  )}
                 </div>
+              );
+            })()}
+          </div>
+
+          <div className="toolbar-divider" />
+
+          <div className="toolbar-group">
+            {/* ── Export button + filename popover ─────────────────────── */}
+            <div style={{ position: 'relative' }}>
+              <button
+                className="btn btn-export"
+                onClick={() => setShowExportPopover(v => !v)}
+                title="Export TextGrid"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                  <polyline points="17 8 12 3 7 8" />
+                  <line x1="12" y1="3" x2="12" y2="15" />
+                </svg>
+                <span className="btn-label">Export</span>
+              </button>
+              {showExportPopover && (
+                <ExportPopover
+                  defaultName={tgFileNameRef.current}
+                  customTiers={customTiers}
+                  onExport={doExportTextGrid}
+                  onClose={() => setShowExportPopover(false)}
+                />
               )}
             </div>
-          );
-        })()}
-        <button
-          className="btn btn-undo-redo"
-          onClick={() => { popUndo(); redraw(); }}
-          disabled={undoStackRef.current.length === 0}
-          title="Undo (Ctrl/Cmd+Z)"
-        >
-          ↶
-        </button>
-        <button
-          className="btn btn-undo-redo"
-          onClick={() => { popRedo(); redraw(); }}
-          disabled={redoCount === 0}
-          title="Redo (Ctrl/Cmd+Y)"
-          style={{ opacity: redoCount === 0 ? 0.4 : 1 }}
-        >
-          ↷
-        </button>
-        {/* ── Export button + filename popover ─────────────────────── */}
-        <div style={{ position: 'relative' }}>
-          <button
-            className="btn btn-export"
-            onClick={() => setShowExportPopover(v => !v)}
-            title="Export TextGrid"
-          >
-            ↓<span className="btn-label">Export</span>
-          </button>
-          {showExportPopover && (
-            <ExportPopover
-              defaultName={tgFileNameRef.current}
-              customTiers={customTiers}
-              onExport={doExportTextGrid}
-              onClose={() => setShowExportPopover(false)}
-            />
-          )}
+
+            {/* ── Overflow menu: Loop, Add Tier, Load TextGrid, theme toggle ── */}
+            <div style={{ position: 'relative' }}>
+              <button
+                className="btn"
+                onClick={() => setShowMoreMenu(v => !v)}
+                title="More options"
+                aria-label="More options"
+              >
+                More<span style={{ marginLeft: 5 }}>⋮</span>
+              </button>
+              {showMoreMenu && (
+                <MoreMenu
+                  onClose={() => setShowMoreMenu(false)}
+                  loopMode={loopMode}
+                  onToggleLoop={() => { const n = !loopModeRef.current; loopModeRef.current = n; setLoopMode(n); }}
+                  showTierManager={showTierManager}
+                  onOpenTierManager={() => setShowTierManager(v => !v)}
+                  onAddTier={(name) => {
+                    const newTier = { id: nextId(), name, visible: true, items: [] };
+                    customTiersRef.current = [...customTiersRef.current, newTier];
+                    setCustomTiers([...customTiersRef.current]);
+                    setShowTierManager(false);
+                  }}
+                  onCloseTierManager={() => setShowTierManager(false)}
+                  onLoadTextGrid={handleTGFile}
+                  theme={theme}
+                  onToggleTheme={() => setTheme(t => (t === 'dark' ? 'light' : 'dark'))}
+                />
+              )}
+            </div>
+          </div>
         </div>
-        {/* ── Add Tier button + inline popover ─────────────────────── */}
-        <div style={{ position: 'relative' }}>
-          <button
-            className="btn btn-tier"
-            onClick={() => setShowTierManager(v => !v)}
-            title="Add a custom tier"
-          >
-            + Tier
-          </button>
-          {showTierManager && (
-            <TierNamePopover
-              onAdd={(name) => {
-                const newTier = { id: nextId(), name, visible: true, items: [] };
-                customTiersRef.current = [...customTiersRef.current, newTier];
-                setCustomTiers([...customTiersRef.current]);
-                setShowTierManager(false);
-              }}
-              onClose={() => setShowTierManager(false)}
-            />
-          )}
-        </div>
-        <label className="load-btn" title="Load a TextGrid file">
-          📄 Load
-          <input type="file" accept=".TextGrid,.textgrid" onChange={handleTGFile} />
-        </label>
-        <button
-          className="btn"
-          onClick={() => setTheme(t => (t === 'dark' ? 'light' : 'dark'))}
-          title={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
-        >
-          {theme === 'dark' ? '🌙' : '☀'}
-        </button>
       </div>
 
       <div style={{ flex: 1, minHeight: 0, display: 'flex', overflow: 'hidden' }}>
@@ -3627,7 +3892,7 @@ export default function App() {
           <div className="panel" ref={wavePanelRef} style={{ flex: panelSplitRef.current }}>
             <div className="panel-gutter panel-gutter--wave">
               <button className="panel-gutter-btn" onClick={() => { focusedPanelRef.current = 'waveform'; adjustYZoom(1); }} title="Zoom in (waveform amplitude)">+</button>
-              <span>WV</span>
+              <span className="gutter-label">WAV</span>
               <button className="panel-gutter-btn" onClick={() => { focusedPanelRef.current = 'waveform'; adjustYZoom(-1); }} title="Zoom out (waveform amplitude)">−</button>
             </div>
             <div className="panel-body">
@@ -3648,57 +3913,20 @@ export default function App() {
             )}
           />
           <div className="panel" ref={specPanelRef} style={{ flex: 1 - panelSplitRef.current }}>
-            <div className="panel-gutter">SP</div>
+            <div className="panel-gutter"><span className="gutter-label">SPEC</span></div>
             <div className="panel-body">
-              <div className="panel-tag" style={{ left: 36 }}>Mel Spectrogram</div>
-              <canvas ref={specCanvasRef} style={{ height: '100%' }} />
-              <div className="spec-overlay-btns">
-                <select className="colormap-select" value={colormapName} onChange={e => handleColormapChange(e.target.value)} title="Spectrogram colormap">
-                  <option value="jet">Jet</option>
-                  <option value="inferno">Inferno</option>
-                  <option value="viridis">Viridis</option>
-                  <option value="greys">Greys</option>
-                </select>
-                <div className="formant-card">
-                  <button
-                    className={`formant-card__generate${specComputing ? ' computing' : ''}`}
-                    onClick={calcSpecForView}
-                    disabled={specComputing}
-                    title="Force an immediate refresh of the enhanced spectrogram for the current view (it otherwise updates automatically as you scroll)"
-                  >
-                    {specComputing ? '⟳ Refreshing…' : '↻ Force Refresh'}
-                  </button>
-                </div>
-                <div className="formant-card">
-                  <button
-                    className={`formant-card__generate${formantComputing ? ' computing' : ''}`}
-                    onClick={calcFormantForView}
-                    disabled={formantComputing}
-                    title="Generate F1·F2·F3 formants for current view"
-                  >
-                    {formantComputing ? '⟳ Generating…' : '⟳ Generate Formants'}
-                  </button>
-                  <div className="formant-card__seg">
-                    {['f1', 'f2', 'f3'].map(key => (
-                      <button
-                        key={key}
-                        className={`formant-card__seg-btn formant-card__seg-btn--${key}${formantVisible[key] ? ' on' : ''}`}
-                        onClick={() => toggleFormant(key)}
-                        title={`Toggle ${key.toUpperCase()} dots`}
-                      >
-                        {key.toUpperCase()}
-                      </button>
-                    ))}
-                    <button
-                      className={`formant-card__seg-btn${formantVisible.f1 && formantVisible.f2 && formantVisible.f3 ? ' on' : ''}`}
-                      onClick={toggleAllFormants}
-                      title="Toggle all formants"
-                    >
-                      All
-                    </button>
-                  </div>
-                </div>
-              </div>
+              <div className="panel-tag">Mel Spectrogram</div>
+              <canvas ref={specCanvasRef} style={{ height: '100%' }} onContextMenu={handleSpecContextMenu} />
+              {specCtxMenu && (
+                <SpecContextMenu
+                  x={specCtxMenu.x} y={specCtxMenu.y} flip={specCtxMenu.flip}
+                  onClose={() => setSpecCtxMenu(null)}
+                  colormapName={colormapName} onColormapChange={handleColormapChange}
+                  formantVisible={formantVisible} onToggleTrack={toggleSpecTrack}
+                  specComputing={specComputing} onForceRefreshSpec={calcSpecForView}
+                  formantComputing={formantComputing} onRegenerateFormants={calcFormantForView}
+                />
+              )}
             </div>
           </div>
         </div>
@@ -3726,12 +3954,8 @@ export default function App() {
 
         <div className="tiers" ref={tiersDivRef}>
           {/* ── Tier visibility bar — always visible ── */}
-          <div style={{
-            display: 'flex', alignItems: 'center', gap: 6,
-            padding: '2px 8px', background: 'var(--bg-panel)',
-            borderBottom: '1px solid var(--border)', flexShrink: 0, height: 22,
-          }}>
-            <span style={{ fontSize: 9, color: 'var(--text-dark)', fontFamily: "'JetBrains Mono',monospace", marginRight: 4 }}>SHOW</span>
+          <div className="tier-visibility-bar">
+            <span className="tier-visibility-title">SHOW</span>
             {[
               { label: 'WRD', visible: wordsVisible, toggle: v => setWordsVisible(v) },
               { label: 'PHN', visible: phonesVisible, toggle: v => setPhonesVisible(v) },
@@ -3744,29 +3968,29 @@ export default function App() {
                 },
               })),
             ].map(({ label, visible, toggle }) => (
-              <label key={label} style={{ display: 'flex', alignItems: 'center', gap: 3, cursor: 'pointer' }}>
+              <label key={label} className="tier-visibility-label">
                 <input
                   type="checkbox"
                   className="tier-visibility-check"
                   checked={visible}
                   onChange={e => toggle(e.target.checked)}
                 />
-                <span style={{ fontSize: 9, fontFamily: "'JetBrains Mono',monospace", color: visible ? 'var(--text-dim)' : 'var(--text-dark)' }}>{label}</span>
+                <span className={visible ? 'is-visible' : ''}>{label}</span>
               </label>
             ))}
-            <span style={{ display: 'flex', alignItems: 'center', gap: 2, marginLeft: 6 }} title="Tile text size">
+            <span className="tier-text-size-controls" title="Tile text size">
               <button className="panel-gutter-btn" onClick={() => { focusedPanelRef.current = 'tiles'; adjustFontScale(-1); }} title="Decrease tile text size">−</button>
               <button className="panel-gutter-btn" onClick={() => { focusedPanelRef.current = 'tiles'; adjustFontScale(1); }} title="Increase tile text size">+</button>
             </span>
-            <span style={{ marginLeft: 'auto' }}>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 3, cursor: 'pointer' }} title="Auto-play tile audio on click">
+            <span className="tier-visibility-spacer">
+              <label className="tier-visibility-label" title="Auto-play tile audio on click">
                 <input
                   type="checkbox"
                   className="tier-visibility-check"
                   checked={autoPlayTile}
                   onChange={e => { autoPlayTileRef.current = e.target.checked; setAutoPlayTile(e.target.checked); }}
                 />
-                <span style={{ fontSize: 9, fontFamily: "'JetBrains Mono',monospace", color: autoPlayTile ? 'var(--text-dim)' : 'var(--text-dark)' }}>AUTO-PLAY</span>
+                <span className={autoPlayTile ? 'is-visible' : ''}>AUTO-PLAY</span>
               </label>
             </span>
           </div>
@@ -3779,7 +4003,10 @@ export default function App() {
               ...(selectedTierIds.has('words') ? { '--outline-color': 'rgba(58,123,213,0.7)', outlineOffset: '-1px' } : {}),
             }}
           >
-            <div className="tier-gutter"><span>WRD</span></div>
+            <div className="tier-gutter">
+              <span className="gutter-label">WRD</span>
+              <span className="gutter-subtitle">Words</span>
+            </div>
             <canvas ref={wordsCanvasRef} />
           </div>
           <div
@@ -3807,7 +4034,10 @@ export default function App() {
               ...(selectedTierIds.has('phones') ? { '--outline-color': 'rgba(60,200,130,0.7)', outlineOffset: '-1px' } : {}),
             }}
           >
-            <div className="tier-gutter"><span>PHN</span></div>
+            <div className="tier-gutter">
+              <span className="gutter-label">PHN</span>
+              <span className="gutter-subtitle">Phonemes</span>
+            </div>
             <canvas ref={phonesCanvasRef} />
           </div>
           {customTiers.map((tier, idx) => {
@@ -3938,15 +4168,12 @@ export default function App() {
 
       {/* ── Loop toast ───────────────────────────────────────────────────── */}
       {loopToast && (
-        <div style={{
-          position: 'fixed', top: 16, left: '50%', transform: 'translateX(-50%)', zIndex: 8000,
-          background: '#10101a', border: '1px solid #3050a0', borderRadius: 14,
-          padding: '20px 28px', maxWidth: 760,
-          fontFamily: 'Inter,system-ui,sans-serif', fontSize: 24, color: '#a0c0f0',
-          display: 'flex', alignItems: 'center', gap: 20,
-          boxShadow: '0 4px 16px rgba(0,0,0,0.5)',
+        <div className="toast toast--info" style={{
+          position: 'fixed', top: 16, left: '50%', transform: 'translateX(-50%)',
+          fontFamily: 'Inter,system-ui,sans-serif',
+          display: 'flex', alignItems: 'center', gap: 8,
         }}>
-          <img src="/loop-alert.gif" alt="" style={{ height: 64, borderRadius: 8, flexShrink: 0 }} />
+          <img src="/loop-alert.gif" alt="" style={{ height: 16, borderRadius: 3, flexShrink: 0 }} />
           <span>Looping selection…</span>
         </div>
       )}
