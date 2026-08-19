@@ -860,7 +860,7 @@ function ShortcutsPopover({ onClose }) {
         <CollapsibleSection title="KEYBOARD" open={openSections.keyboard} onToggle={() => toggleSection('keyboard')}>
           <ShortcutRows rows={SHORTCUTS} />
         </CollapsibleSection>
-        <CollapsibleSection title="TILE EDITING (EDIT MODE)" open={openSections.tiles} onToggle={() => toggleSection('tiles')}>
+        <CollapsibleSection title="TILE EDITING (UNLOCKED)" open={openSections.tiles} onToggle={() => toggleSection('tiles')}>
           <ShortcutRows rows={TILE_EDITING_HINTS} />
         </CollapsibleSection>
         <CollapsibleSection title="TILE COLORS" open={openSections.colors} onToggle={() => toggleSection('colors')}>
@@ -1777,6 +1777,18 @@ export default function App() {
     scheduleSpecPrefetchRef.current();
   }, [drawWave, drawSpec, drawRuler, drawTier, drawMinimap, drawScrollbar, drawOverlay]);
 
+  // Flips editModeRef (and its useState twin, which exists only to force a re-render)
+  // between editable and locked/view-only. Shared by the `1` keydown handler and the
+  // toolbar lock icon so keyboard and mouse go through one place instead of duplicating
+  // the flip/clear-selection/redraw sequence.
+  const toggleEditMode = useCallback(() => {
+    const n = !editModeRef.current;
+    editModeRef.current = n;
+    setEditMode(n);
+    if (!n) clearSelection(); // clear selection when locking (leaving edit mode)
+    redraw();
+  }, [clearSelection, redraw]);
+
   // dir: +1 (zoom in) or -1 (zoom out). Only drawWave() needs to rerun — this is the
   // one control in the app that provably affects only the waveform canvas.
   const adjustYZoom = useCallback((dir) => {
@@ -2499,12 +2511,11 @@ export default function App() {
       if ((e.ctrlKey || e.metaKey) && e.code === 'KeyS') { e.preventDefault(); requestSave(); return; }
       if (e.code === 'KeyL') { const n = !loopModeRef.current; loopModeRef.current = n; setLoopMode(n); }
       if (e.code === 'KeyR' && !e.ctrlKey && !e.metaKey) { e.preventDefault(); calcSpecForView(); }
-      // Edit mode hotkey — hardcoded to '1'.
+      // Lock/view-only toggle hotkey — hardcoded to '1'. Same effect as clicking the
+      // lock icon in the toolbar (see toggleEditMode).
       if (e.code === 'Digit1' || e.key === '1' || (e.code === 'Numpad1' && e.key === '1')) {
         e.preventDefault();
-        const n = !editModeRef.current; editModeRef.current = n; setEditMode(n);
-        if (!n) clearSelection(); // clear selection when leaving edit mode
-        redraw();
+        toggleEditMode();
       }
       if ((e.ctrlKey || e.metaKey) && e.code === 'KeyZ') {
         e.preventDefault();
@@ -2614,7 +2625,7 @@ export default function App() {
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [stopPlay, startPlay, redraw, popUndo, pushUndo, commitTierItems, clearSelection, requestSave, adjustYZoom, adjustFontScale, calcSpecForView, getAllTiers, syncSelectionState]);
+  }, [stopPlay, startPlay, redraw, popUndo, pushUndo, commitTierItems, clearSelection, requestSave, adjustYZoom, adjustFontScale, calcSpecForView, getAllTiers, syncSelectionState, toggleEditMode]);
 
   // ── Zoom ──────────────────────────────────────────────────────────────
 
@@ -3883,6 +3894,20 @@ export default function App() {
             >
               GSA
             </button>
+            {!editMode && (
+              <button
+                type="button"
+                className="lock-indicator"
+                onClick={toggleEditMode}
+                title="Locked — view only. Click (or press 1) to unlock editing."
+                aria-label="Unlock editing (currently locked, view only)"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+                  <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+                </svg>
+              </button>
+            )}
             {isDirty && !saveState && (
               <span className="save-indicator save-indicator--unsaved">● Unsaved</span>
             )}

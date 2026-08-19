@@ -36,7 +36,7 @@ You can also load files at any time without restarting:
 
 ## Tips and Tricks for Annotating
 
-- **Key Reminder**: edit mode is on by default — press **`1`** at any time to toggle it off/on.
+- **Key Reminder**: tiles are editable by default — press **`1`**, or click the lock icon that appears next to the **GSA** logo once locked, to switch into view-only mode and back.
 
 ### Navigation
 
@@ -52,7 +52,7 @@ You can also load files at any time without restarting:
 | Waveform amplitude zoom | `+`/`-` buttons next to the "WAV" label, or `+`/`-` keys after clicking the waveform |
 | Tile text size | `+`/`-` buttons in the SHOW bar, or `+`/`-` keys after clicking a tile |
 | Seek | Click anywhere on the waveform, spectrogram, or ruler |
-| Select tile | Click any tile (edit mode not required) — moves playhead to onset and sets play region |
+| Select tile | Click any tile (works whether locked or unlocked) — moves playhead to onset and sets play region |
 | Play tile | After selecting a tile, press `Space` or ▶ Play |
 | Auto-play tile | Enable AUTO-PLAY in the SHOW bar — clicking a tile starts playback immediately |
 
@@ -74,11 +74,11 @@ Click **Scores** in the toolbar to open the confidence dashboard: stats (mean/me
 
 Edited status, and the before/after text, are saved into the `.TextGrid` file along with everything else — so the next time the file is loaded, the Edited words list and the green tile highlighting reappear exactly as they were.
 
-### Edit mode
+### Locking / view-only mode
 
-Edit mode is **on by default**. Press **`1`** to toggle between edit mode and view mode.
+Tiles are **editable by default**. Press **`1`**, or click the lock icon next to the **GSA** logo (it appears once locked), to switch into **locked / view-only mode** — editing, tile-editing shortcuts, and deletion are disabled until you unlock again.
 
-There's no persistent hint bar in edit mode — click the **GSA** logo in the toolbar at any time to open the full shortcuts reference.
+There's no persistent hint bar while unlocked — click the **GSA** logo in the toolbar at any time to open the full shortcuts reference.
 
 **Single tile operations:**
 - **Click a tile** — exclusive select: replaces any previous selection with that one tile, moves the playhead to its onset, and sets the play region to onset→offset
@@ -125,15 +125,15 @@ Click **Export** to download the annotations as a file. Two format options:
 | `Space` | Play / Pause |
 | `L` | Toggle loop |
 | `R` | Force-refresh the spectrogram for the current view |
-| `1` | Toggle edit mode (on by default) |
+| `1` | Toggle lock / view-only mode (unlocked & editable by default) |
 | `Ctrl/Cmd+S` | Save TextGrid to disk (dev only) |
 | `Ctrl/Cmd+Z` | Undo |
 | `Ctrl/Cmd+Y` | Redo |
-| `Ctrl/Cmd+C` | Copy selected tile(s), including a group across tiers (edit mode, requires a selection) |
-| `Ctrl/Cmd+V` | Paste copied tile(s) as new tile(s) anchored at the playhead (edit mode) |
-| `⌫` / `Delete` | Delete selected tile(s) (edit mode) |
-| `Shift+click` | Range-select in the current tier (keeps other tiers); does not set the play region (edit mode) |
-| `Ctrl/Cmd+click` (or drag) | Toggle tiles into/out of a multi-selection across tiers — does not replace the selection or set the play region; drag adds tiles in the starting tier (edit mode) |
+| `Ctrl/Cmd+C` | Copy selected tile(s), including a group across tiers (when unlocked, requires a selection) |
+| `Ctrl/Cmd+V` | Paste copied tile(s) as new tile(s) anchored at the playhead (when unlocked) |
+| `⌫` / `Delete` | Delete selected tile(s) (when unlocked) |
+| `Shift+click` | Range-select in the current tier (keeps other tiers); does not set the play region (when unlocked) |
+| `Ctrl/Cmd+click` (or drag) | Toggle tiles into/out of a multi-selection across tiers — does not replace the selection or set the play region; drag adds tiles in the starting tier (when unlocked) |
 | `←` / `→` | Pan view by 20% |
 | `↑` / `↓` | Zoom the timeline viewing window in / out |
 | `+` / `-` | Zoom waveform amplitude, or tile text size if a tier was last clicked |

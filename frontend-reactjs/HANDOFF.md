@@ -383,7 +383,7 @@ so it should persist across loads within a session.
 
 ## Edit Mode
 
-**Edit mode is on by default on load** (`useState(true)` / `useRef(true)`). Toggled only by the **`1` keyboard shortcut** — there is no toolbar button for it.
+**Edit mode is on by default on load** (`useState(true)` / `useRef(true)`). Toggled by the **`1` keyboard shortcut**, or by clicking the lock icon that appears next to the **GSA** logo once locked (added 2026-08-19 — see [Lock icon / toolbar indicator](#lock-icon--toolbar-indicator-2026-08-19) below).
 
 ### Split Edit Button (removed)
 
@@ -392,6 +392,29 @@ The toolbar previously had a unified Edit button split into two clickable zones 
 The JSX and the `editShortcut`/`editingShortcut` state plus `editShortcutRef` were deleted (2026-07-25) as part of a dead-code audit. Some legacy `.btn-edit-split*` selectors still remain in `index.css`; they are unused by the current JSX and can be removed in a future CSS cleanup. Check git history (search "Split edit button") if this UI ever needs to be restored.
 
 The hotkey is now **hardcoded to `1`** in the keydown handler (no longer configurable): it matches against `e.code`, `e.key`, and the numpad alias (`Numpad1`), so numpad `1` also fires edit mode regardless of NumLock state.
+
+### Lock icon / toolbar indicator (2026-08-19)
+
+Closes Todos #8 ("Give edit mode a visible on/off indicator"). A small padlock icon
+button now appears next to the **GSA** logo in the toolbar, but **only while locked**
+(`{!editMode && (...)}`) — mirroring how `.save-indicator` only renders when there's
+something to report, rather than a persistent always-on badge. The default
+(unlocked/editable) toolbar is therefore unchanged from before; the icon only shows up
+as a "you are in view-only mode" cue when it's actually relevant.
+
+Clicking the icon calls `toggleEditMode` — a `useCallback` (deps `[clearSelection,
+redraw]`) extracted from the `1` keydown handler's old inline body, so the keyboard and
+mouse paths share one flip-ref/flip-state/clear-selection/redraw sequence instead of
+duplicating it. `editMode`/`editModeRef` themselves are unchanged by this feature — this
+is a UI affordance plus a user-facing wording change (see [Keyboard
+Shortcuts](#keyboard-shortcuts) and `USAGE.md`, which now describe this as "lock /
+view-only mode" rather than "edit mode toggle"); internal identifiers and code comments
+keep the `editMode` name throughout.
+
+New CSS class `.lock-indicator` (see [CSS](#css)) — neutral `--text-dim` at rest with
+`--accent-soft` + a faint accent background on hover, matching `.logo-btn`'s own hover
+treatment. Deliberately does **not** reuse the amber `.save-indicator--unsaved` color:
+locked/view-only is a neutral state, not a warning.
 
 ### Waveform interaction in edit mode
 
@@ -1116,15 +1139,15 @@ if (isWord) {
 | Space | Play / pause |
 | L | Toggle loop |
 | R | Force-refresh spectrogram for the current view (same as the ↻ Force Refresh button) |
-| `1` | Toggle edit mode (on by default; not currently rebindable — see [Split Edit Button (removed)](#split-edit-button-removed)) |
+| `1` | Toggle lock / view-only mode (unlocked & editable by default; also toggleable via the lock icon next to the GSA logo once locked — see [Lock icon / toolbar indicator](#lock-icon--toolbar-indicator-2026-08-19); the hotkey itself is not rebindable — see [Split Edit Button (removed)](#split-edit-button-removed)) |
 | Ctrl/Cmd+S | Save TextGrid to `public/` (dev only) |
 | Ctrl/Cmd+Z | Undo |
 | Ctrl/Cmd+Y | Redo |
-| Ctrl/Cmd+C | Copy selected tile(s) — single or group, across tiers (edit mode, requires a selection) |
-| Ctrl/Cmd+V | Paste copied tile(s) as new tile(s), anchored at the playhead (edit mode) |
-| ⌫ / Delete | Delete selected tile(s) (edit mode, requires a selection) |
-| Shift+click | Range-select in the current tier (keeps other tiers); does not set the play region (edit mode) |
-| Ctrl/Cmd+click (or drag) | Toggle tiles into/out of a multi-selection across tiers — unlike plain click, does not replace the selection or set the play region; drag adds tiles in the starting tier (edit mode) |
+| Ctrl/Cmd+C | Copy selected tile(s) — single or group, across tiers (when unlocked, requires a selection) |
+| Ctrl/Cmd+V | Paste copied tile(s) as new tile(s), anchored at the playhead (when unlocked) |
+| ⌫ / Delete | Delete selected tile(s) (when unlocked, requires a selection) |
+| Shift+click | Range-select in the current tier (keeps other tiers); does not set the play region (when unlocked) |
+| Ctrl/Cmd+click (or drag) | Toggle tiles into/out of a multi-selection across tiers — unlike plain click, does not replace the selection or set the play region; drag adds tiles in the starting tier (when unlocked) |
 | Arrow Left/Right | Pan by 20% of view |
 | Arrow Up/Down | Zoom the timeline viewing window in / out (same steps as the ZOOM `−`/`+` buttons) |
 | `+`/`-` (or `=`/`_`, numpad +/-) | Waveform y-zoom, or tile font size if a tier was last clicked — see [Keyboard shortcut context](#keyboard-shortcut-context-waveform-vs-tiles) |
@@ -1171,6 +1194,7 @@ Notable component classes:
 
 | Class | Purpose |
 |---|---|
+| `.lock-indicator` | Clickable padlock icon in the logo bar, shown only while locked (see [Lock icon / toolbar indicator](#lock-icon--toolbar-indicator-2026-08-19)) |
 | `.save-indicator` | Inline save status in logo bar |
 | `.save-indicator--unsaved` | Amber — unsaved changes present |
 | `.save-indicator--saving/saved/error` | Blue/green/red state variants |
@@ -1396,7 +1420,7 @@ This must stay in `index.html`, not move into a React effect — React can't run
 
 - **Edit mode is on by default.** Both `useState(true)` and `useRef(true)` must match — if you change the default, update both.
 
-- **The edit-mode hotkey is hardcoded to `1`**, not read from state/ref. The rebindable-shortcut UI and its `editShortcut`/`editingShortcut`/`editShortcutRef` were deleted (see [Split Edit Button (removed)](#split-edit-button-removed)); check git history before reintroducing a reference to them elsewhere.
+- **The edit-mode hotkey is hardcoded to `1`**, not read from state/ref. The rebindable-shortcut UI and its `editShortcut`/`editingShortcut`/`editShortcutRef` were deleted (see [Split Edit Button (removed)](#split-edit-button-removed)); check git history before reintroducing a reference to them elsewhere. A mouse alternative was added 2026-08-19 (the lock icon — see [Lock icon / toolbar indicator](#lock-icon--toolbar-indicator-2026-08-19)), but it calls the same hardcoded-to-`1` toggle; the hotkey itself is still not user-remappable.
 
 - **Toolbar button classes (`.toolbar .btn`, `.toolbar .load-btn`, etc.) set an explicit `height: var(--toolbar-btn-h)`.** Don't override `padding`'s vertical component or set a conflicting `height` on a specific toolbar button — it will fall out of alignment with its siblings. Adjust `--toolbar-btn-h` in `:root` if you need to resize all of them at once.
 
@@ -1468,7 +1492,7 @@ When `/api/public-files` returns more than one `.wav` or `.TextGrid`, the app re
 - `buildMelSpectrogram` in `dsp.js` result is only used as a presence check for short audio; skipped entirely for audio > 10 min
 - `Ctrl/Cmd+S` save does not work in production builds (no server-side endpoint)
 - Browser holds full decoded `AudioBuffer` in memory for the entire session — no streaming path for long audio
-- Edit-mode hotkey is no longer rebindable from the UI (see [Split Edit Button (removed)](#split-edit-button-removed))
+- Edit-mode hotkey (`1`) is still not rebindable from the UI (see [Split Edit Button (removed)](#split-edit-button-removed)) — though a lock icon in the toolbar now provides a mouse-clickable equivalent action when locked (see [Lock icon / toolbar indicator](#lock-icon--toolbar-indicator-2026-08-19))
 
 ---
 
@@ -1480,7 +1504,6 @@ See also `CODE_REVIEW_FINDINGS.md` (repo root) — a separate simplification/eff
 
 ### Scoped features/fixes (moderate effort)
 
-8. Give edit mode a visible on/off indicator — it's on by default (see [Edit Mode](#edit-mode)) but the only way to tell is pressing `1` and watching behavior change; there's no toolbar chrome or mode badge today.
 9. Make the Export popover show its real difference. The Full vs Praat-compatible radio rows in `ExportPopover` both list the same tier set (`WRD + PHN + custom`) as their subtitle — the actual difference is score/edited/`original` metadata (see [TextGrid parsing and serialisation](#textgrid-parsing-and-serialisation)), which isn't visible anywhere in the dialog. While in there, rename `doExportTextGrid`'s `includeCustom` param — it actually sets `praatCompat` (`praatCompat = !includeCustom`), not which tiers get included.
 12. Add click-to-seek to the Confidence Dashboard's lowest-confidence word list (see [Confidence Score Coloring](#confidence-score-coloring)) — currently display-only; clicking a word there could jump the playhead/view to it.
 14. Let the ASR pipeline take an optional reference transcript (`.txt`) of the audio's real text, editable by the user beforehand, and use it to correct/constrain the ASR pass so downstream MFA alignment is more accurate than relying on ASR output alone.
