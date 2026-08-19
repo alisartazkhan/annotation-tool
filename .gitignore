@@ -24,3 +24,6 @@ frontend-reactjs/public/*.json
 *.log
 npm-debug.log*
 __pycache__/
+
+# Paper
+paper.md

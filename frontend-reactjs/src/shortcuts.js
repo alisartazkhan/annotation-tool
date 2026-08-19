@@ -19,7 +19,6 @@ you should know about:`;
 export const SHORTCUTS = [
   { keys: ['Space'], desc: 'Play / pause' },
   { keys: ['L'], desc: 'Toggle loop' },
-  { keys: ['F'], desc: 'Fit full duration in view' },
   { keys: ['R'], desc: 'Force-refresh the spectrogram for the current view' },
   { keys: ['1'], desc: 'Toggle edit mode on/off (on by default)' },
   { keys: ['←', '→'], desc: 'Pan the view by 20% of the current span' },

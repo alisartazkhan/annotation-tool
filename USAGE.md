@@ -25,10 +25,12 @@ Open **http://localhost:5173** — the audio and TextGrid load automatically.
 **Multiple files:** if `public/` contains more than one `.wav` or `.TextGrid`, a picker modal appears on startup letting you choose which pair to open.
 
 You can also load files at any time without restarting:
-- Click **📄 Load** in the toolbar to load a new TextGrid
+- Click **More ⋮** in the toolbar, then **Load TextGrid** or **Load Wav**, to swap in a new TextGrid or audio file
 - **Drag and drop** a `.wav` or `.TextGrid` file anywhere on the page
 
 <video src="https://github.com/user-attachments/assets/642f285d-c20b-4bd4-8114-e0bb2c3ec80d" controls width="100%"></video>
+
+> **Non-English audio:** MFA (used by both the initial ASR pipeline and the in-app MFA re-alignment button) defaults to English. See [Advanced features → In-browser MFA re-alignment](ADVANCED.md#in-browser-mfa-re-alignment) to point it at another language, or [Transcription → Non-English audio](TRANSCRIPTION.md#non-english-audio) for the initial pipeline.
 
 ---
 
@@ -41,14 +43,13 @@ You can also load files at any time without restarting:
 | Action | How |
 |---|---|
 | Play / Pause | `Space` or ▶ Play button |
-| Loop playback | `L` or ↺ Loop button |
+| Loop playback | `L` or the **Loop selection** checkbox in the **More ⋮** toolbar menu |
 | Playback speed | 0.25×–2× dropdown in toolbar |
 | Zoom in/out | Scroll wheel, zoom slider / `−`/`+` buttons in toolbar, or `↑`/`↓` |
 | Zoom at cursor | `Ctrl/Cmd + scroll` |
 | Pan left/right | Horizontal scroll, `←`/`→` (20% of view), or drag the minimap |
-| Fit full audio | `F` |
-| Force-refresh spectrogram | `R` or ↻ Force Refresh button |
-| Waveform amplitude zoom | `+`/`-` buttons next to the "WV" label, or `+`/`-` keys after clicking the waveform |
+| Force-refresh spectrogram | `R`, or right-click the spectrogram → Spectrogram settings → ↻ Force Refresh |
+| Waveform amplitude zoom | `+`/`-` buttons next to the "WAV" label, or `+`/`-` keys after clicking the waveform |
 | Tile text size | `+`/`-` buttons in the SHOW bar, or `+`/`-` keys after clicking a tile |
 | Seek | Click anywhere on the waveform, spectrogram, or ruler |
 | Select tile | Click any tile (edit mode not required) — moves playhead to onset and sets play region |
@@ -59,9 +60,9 @@ You can also load files at any time without restarting:
 
 The annotation area shows stacked tiers below the waveform and spectrogram:
 
-- **WRD** — word-level annotations (blue tiles). Tiles are colored by confidence score if present: red (low) → yellow → green (high).
-- **PHN** — phoneme-level annotations (green tiles). Includes an IPA virtual keyboard when renaming.
-- **Custom tiers** — any additional tiers loaded from the TextGrid, or created with the **+ Tier** button.
+- **WRD** — word-level annotations (muted sage-green tiles by default). Tiles are colored by confidence score if present: red (low) → yellow → green (high).
+- **PHN** — phoneme-level annotations (muted lavender tiles by default). Includes an IPA virtual keyboard when renaming.
+- **Custom tiers** — any additional tiers loaded from the TextGrid, or created with **+ Add tier** in the **More ⋮** toolbar menu.
 
 Use the **SHOW** checkbox bar at the top of the tier area to hide/show individual tiers. Tiers can be resized by dragging the dividers between them. The **AUTO-PLAY** checkbox (right side of the SHOW bar) makes clicking any tile immediately play its audio without needing to press Play.
 
@@ -69,7 +70,7 @@ Use the **SHOW** checkbox bar at the top of the tier area to hide/show individua
 
 Words you create or manually change (by editing, moving, or resizing a tile, or via **Validate word** in the right-click menu) are marked as **edited** and highlighted in green on the tile, separate from the confidence-score color scale.
 
-Click **◎ Scores** in the toolbar to open the confidence dashboard: stats (mean/median/min/max), a 10-bin histogram, a color legend, and the 5 lowest-confidence words. Below the lowest-confidence list, an **Edited words** section lists every edited word, showing what it was before and what it was changed to (e.g. ~~teh~~ → the).
+Click **Scores** in the toolbar to open the confidence dashboard: stats (mean/median/min/max), a 10-bin histogram, a color legend, and the 5 lowest-confidence words. Below the lowest-confidence list, an **Edited words** section lists every edited word, showing what it was before and what it was changed to (e.g. ~~teh~~ → the).
 
 Edited status, and the before/after text, are saved into the `.TextGrid` file along with everything else — so the next time the file is loaded, the Edited words list and the green tile highlighting reappear exactly as they were.
 
@@ -96,8 +97,8 @@ There's no persistent hint bar in edit mode — click the **GSA** logo in the to
 - **Click a grouped tile without dragging** — collapses selection back to just that tile (and sets the play region to it)
 - **`⌫` / Delete key** — deletes all selected tiles across all tiers in one undoable operation
 
-**Undo:** `Ctrl/Cmd+Z` or the **↶** toolbar button — steps back through all edit operations (max 100 steps).
-**Redo:** `Ctrl/Cmd+Y` or the **↷** toolbar button — steps forward again through undone operations.
+**Undo:** `Ctrl/Cmd+Z` or the **↩** toolbar button — steps back through all edit operations (max 100 steps).
+**Redo:** `Ctrl/Cmd+Y` or the **↪** toolbar button — steps forward again through undone operations.
 
 ### Saving
 
@@ -110,7 +111,7 @@ There's no persistent hint bar in edit mode — click the **GSA** logo in the to
 
 ### Exporting
 
-Click **↓ Export** to download the annotations as a file. Two format options:
+Click **Export** to download the annotations as a file. Two format options:
 
 - **Full export** — includes all tiers (WRD + PHN + custom), confidence scores, and edited/validated-word metadata; best for reloading into this tool since nothing is lost
 - **Praat compatible** — the same tiers (WRD + PHN + custom), but with confidence-score and edited/validated metadata fields omitted so Praat opens the file without warnings
@@ -123,7 +124,6 @@ Click **↓ Export** to download the annotations as a file. Two format options:
 |---|---|
 | `Space` | Play / Pause |
 | `L` | Toggle loop |
-| `F` | Fit full audio in view |
 | `R` | Force-refresh the spectrogram for the current view |
 | `1` | Toggle edit mode (on by default) |
 | `Ctrl/Cmd+S` | Save TextGrid to disk (dev only) |

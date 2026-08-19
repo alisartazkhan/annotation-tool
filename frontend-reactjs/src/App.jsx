@@ -3,7 +3,7 @@ import { parseTextGrid } from './parseTextGrid.js';
 import { setupCanvas, fmtTime } from './canvasUtils.js';
 import {
   COLORMAPS, inferno,
-  buildMelSpectrogram, buildRmsEnvelope,
+  buildMelSpectrogram,
 } from './dsp.js';
 import { WELCOME_TITLE, WELCOME_TEXT, SHORTCUTS, TILE_EDITING_HINTS, TILE_COLOR_LEGEND } from './shortcuts.js';
 
@@ -324,6 +324,23 @@ function assignRows(items) {
   return sorted;
 }
 
+// How many of a tier's stacked rows (item.row, assigned globally and stably by
+// assignRows above) actually need drawing for the given [t0,t1] view — a stacked
+// overlap elsewhere in the file, out of view, shouldn't keep every other view squeezed
+// into thin rows when nothing currently visible overlaps. Shared by drawTier (rendering)
+// and hitTest (click/drag hit-testing) — they must always agree on this, or clicking a
+// visually-drawn tile could hit-test against the wrong row.
+function visibleRowCount(items, t0, t1) {
+  let max = 1;
+  for (const it of items) {
+    if (it.t1 > t0 && it.t0 < t1) {
+      const r = (it.row ?? 0) + 1;
+      if (r > max) max = r;
+    }
+  }
+  return max;
+}
+
 function withIds(items) {
   return items.map(it => ({ ...it, id: it.id ?? nextId(), row: 0 }));
 }
@@ -490,8 +507,8 @@ function MoreMenu({
   onClose,
   loopMode, onToggleLoop,
   showTierManager, onOpenTierManager, onAddTier, onCloseTierManager,
-  onLoadTextGrid,
-  theme, onToggleTheme,
+  onLoadTextGrid, onLoadWav,
+  onToggleTheme,
 }) {
   const menuRef = useRef(null);
   useEffect(() => {
@@ -517,13 +534,36 @@ function MoreMenu({
           </div>
         )}
       </div>
-      <label className="ctx-menu__item">
-        📄 Load TextGrid
+      <label className="ctx-menu__item" style={{ display: 'flex', alignItems: 'center' }}>
+        <span style={{ display: 'inline-flex', marginRight: 8 }}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+          </svg>
+        </span>
+        Load TextGrid
         <input type="file" accept=".TextGrid,.textgrid" onChange={onLoadTextGrid} style={{ display: 'none' }} />
       </label>
+      <label className="ctx-menu__item" style={{ display: 'flex', alignItems: 'center' }}>
+        <span style={{ display: 'inline-flex', marginRight: 8 }}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+          </svg>
+        </span>
+        Load Wav
+        <input type="file" accept=".wav,audio/wav" onChange={onLoadWav} style={{ display: 'none' }} />
+      </label>
       <div className="ctx-menu__sep" />
-      <div className="ctx-menu__item" onClick={() => { onToggleTheme(); onClose(); }}>
-        {theme === 'dark' ? '☀ Switch to light theme' : '🌙 Switch to dark theme'}
+      <div
+        className="ctx-menu__item"
+        style={{ display: 'flex', alignItems: 'center' }}
+        onClick={() => { onToggleTheme(); onClose(); }}
+      >
+        <span style={{ display: 'inline-flex', marginRight: 8 }}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+          </svg>
+        </span>
+        Switch theme
       </div>
     </div>
   );
@@ -579,6 +619,36 @@ function FilePicker({ wavs, tgs, onSelect }) {
         >
           Open
         </button>
+      </div>
+    </div>
+  );
+}
+
+// First-save confirmation — mirrors the MFA word-picker modal's modal-backdrop/modal-card
+// + Cancel/primary-action button footer so it doesn't look like a one-off dialog. "Save"
+// reuses .btn-export's green (both are "commit tiers to a file" actions).
+function SaveConfirmModal({ filename, onConfirm, onCancel }) {
+  const [dontAskAgain, setDontAskAgain] = useState(false);
+  return (
+    <div className="modal-backdrop" onClick={(e) => { if (e.target === e.currentTarget) onCancel(); }}>
+      <div className="modal-card" style={{ padding: '20px 24px', minWidth: 340, maxWidth: 440, fontFamily: 'Inter,system-ui,sans-serif' }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)', marginBottom: 6 }}>
+          Overwrite existing TextGrid?
+        </div>
+        <div style={{ fontSize: 11, color: 'var(--text-mute)', marginBottom: 16, lineHeight: 1.5 }}>
+          This will overwrite <code style={{ color: 'var(--accent-soft)' }}>{filename}</code> in{' '}
+          <code style={{ color: 'var(--accent-soft)' }}>public/</code> with the current state of all tiers.
+        </div>
+
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text-dim)', marginBottom: 16, cursor: 'pointer' }}>
+          <input type="checkbox" checked={dontAskAgain} onChange={e => setDontAskAgain(e.target.checked)} />
+          Don't ask me again
+        </label>
+
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+          <button className="btn" onClick={onCancel}>Cancel</button>
+          <button className="btn btn-export" onClick={() => onConfirm(dontAskAgain)}>Save</button>
+        </div>
       </div>
     </div>
   );
@@ -924,6 +994,7 @@ export default function App() {
   const [popup, setPopup]               = useState(null);
   const [dropping, setDropping]         = useState(false);
   const [colormapName, setColormapName] = useState('jet');
+  const [envelopeVisible, setEnvelopeVisible] = useState(true);
   const [formantVisible, setFormantVisible] = useState({ f0: false, f1: false, f2: false, f3: false });
   const [specComputing, setSpecComputing] = useState(false);
   const [formantComputing, setFormantComputing] = useState(false);
@@ -956,6 +1027,10 @@ export default function App() {
   const [saveState, setSaveState] = useState(null); // null | 'saving' | 'saved' | 'error'
   const [isDirty, setIsDirty]     = useState(false);
   const savedTextGridRef          = useRef(null);   // serialized baseline after load or save
+  const [showSaveConfirm, setShowSaveConfirm] = useState(false); // first-save-this-session overwrite confirmation
+  let skipSaveConfirmInit = false;
+  try { skipSaveConfirmInit = localStorage.getItem('skipSaveConfirm') === 'true'; } catch (_) {}
+  const skipSaveConfirmRef = useRef(skipSaveConfirmInit); // "Don't ask me again" — persisted across sessions
   const saveTimerRef = useRef(null);
   const MFA_SERVER = 'http://localhost:5050';
   const mfaQueueRef = useRef([]);
@@ -1017,8 +1092,8 @@ export default function App() {
   const customTierDivRefs = useRef({}); // keyed by tier id — the .tier div element
   const durationRef      = useRef(70);
   const colormapNameRef  = useRef('jet');
+  const envelopeVisibleRef = useRef(true); // whether drawWave draws the RMS envelope overlay
   const formantVisibleRef = useRef({ f0: false, f1: false, f2: false, f3: false }); // which formant/pitch dot-tracks are drawn
-  const rmsEnvRef        = useRef(null);
   const formantTrackRef  = useRef(null);
   const editModeRef      = useRef(true);
   const undoStackRef     = useRef([]); // snapshots: { words, phones, customTiers }
@@ -1153,14 +1228,6 @@ export default function App() {
   }, []);
   // ── Draw helpers ──────────────────────────────────────────────────────
 
-  const drawPlayheadLine = useCallback((ctx, w, h) => {
-    if (playingRef.current) return;
-    const px = tX(playheadRef.current, w);
-    if (px < 0 || px > w) return;
-    ctx.strokeStyle = '#3a7bd5'; ctx.lineWidth = 1.5;
-    ctx.beginPath(); ctx.moveTo(px, 0); ctx.lineTo(px, h); ctx.stroke();
-  }, [tX]);
-
   const drawSelectionRect = useCallback((ctx, w, h, alpha = 0.15) => {
     const sel = selectionRef.current;
     if (!sel) return;
@@ -1226,6 +1293,14 @@ export default function App() {
         }
       } else if (rawCh && samplesPerPx <= 200) {
         ctx.fillStyle = isLight ? '#252a32' : 'rgba(232,234,238,0.92)';
+        // Per-pixel-column peak magnitude, reusing the same mn/mx already computed for the
+        // min/max fill below (no extra sample scan needed). Smoothed afterward with a
+        // time-based moving average so it reads as a loudness "swell" contour rather than
+        // tracking every sample-to-sample fluctuation — an unsmoothed per-pixel envelope
+        // (even peak-based) still looked jagged/noisy, and a plain per-pixel RMS (the
+        // first attempt at this) was both jagged *and* too short relative to the actual
+        // peaks, since RMS is mathematically always <= peak.
+        const envPerCol = envelopeVisibleRef.current ? new Float32Array(w) : null;
         for (let cx = 0; cx < w; cx++) {
           const tA = t0 + (cx / w) * (t1 - t0);
           const tB = t0 + ((cx + 1) / w) * (t1 - t0);
@@ -1240,20 +1315,40 @@ export default function App() {
           const yTop = mid - mx * gain * mid;
           const yBot = mid - mn * gain * mid;
           ctx.fillRect(cx, yTop, 1, Math.max(1, yBot - yTop));
+          if (envPerCol) envPerCol[cx] = Math.max(mx, -mn);
         }
-        const rms = rmsEnvRef.current;
-        if (rms) {
-          ctx.strokeStyle = isLight ? 'rgba(47,104,196,0.42)' : 'rgba(148,164,184,0.68)'; ctx.lineWidth = 1.2;
-          for (const sign of [-1, 1]) {
-            ctx.beginPath(); let started = false;
-            for (let cx = 0; cx < w; cx++) {
-              const t = t0 + (cx / w) * (t1 - t0);
-              const fr = Math.max(0, Math.min(rms.frames - 1, Math.floor((t / DUR) * rms.frames)));
-              const y = mid + sign * (rms.env[fr] || 0) * gain * mid;
-              if (!started) { ctx.moveTo(cx, y); started = true; } else ctx.lineTo(cx, y);
-            }
-            ctx.stroke();
+        if (envPerCol) {
+          // Box-filter moving average over a fixed ~30ms window (converted to pixels for
+          // the current zoom via pxPerSec), computed with a prefix sum so it's O(w)
+          // regardless of window size.
+          const pxPerSec = w / (t1 - t0);
+          const smoothPx = Math.max(1, Math.round(0.03 * pxPerSec));
+          const prefix = new Float32Array(w + 1);
+          for (let i = 0; i < w; i++) prefix[i + 1] = prefix[i] + envPerCol[i];
+          const half = Math.floor(smoothPx / 2);
+          // Envelope-only amplitude multiplier (edit this to make the overlay taller/
+          // shorter) — applied on top of the waveform's own `gain`, and clamped to 1 so a
+          // sustained full-scale passage can't push the smoothed contour past the panel's
+          // own top/bottom edge.
+          const ENVELOPE_GAIN_BOOST = 2.0;
+          ctx.beginPath();
+          for (let cx = 0; cx < w; cx++) {
+            const a = Math.max(0, cx - half), b = Math.min(w - 1, cx + half);
+            const v = Math.min(1, ((prefix[b + 1] - prefix[a]) / (b - a + 1)) * ENVELOPE_GAIN_BOOST);
+            const y = mid - v * gain * mid;
+            if (cx === 0) ctx.moveTo(cx, y); else ctx.lineTo(cx, y);
           }
+          for (let cx = w - 1; cx >= 0; cx--) {
+            const a = Math.max(0, cx - half), b = Math.min(w - 1, cx + half);
+            const v = Math.min(1, ((prefix[b + 1] - prefix[a]) / (b - a + 1)) * ENVELOPE_GAIN_BOOST);
+            const y = mid + v * gain * mid;
+            ctx.lineTo(cx, y);
+          }
+          ctx.closePath();
+          ctx.fillStyle = isLight ? 'rgba(47,104,196,0.12)' : 'rgba(148,164,184,0.15)';
+          ctx.fill();
+          ctx.strokeStyle = isLight ? 'rgba(47,104,196,0.55)' : 'rgba(148,164,184,0.75)'; ctx.lineWidth = 1.2;
+          ctx.stroke();
         }
       } else {
         const peakData = data || new Float32Array(0);
@@ -1267,8 +1362,7 @@ export default function App() {
         }
       }
     }
-    drawPlayheadLine(ctx, w, h);
-  }, [tX, drawSelectionRect, drawPlayheadLine]);
+  }, [tX, drawSelectionRect]);
 
   const drawSpec = useCallback(() => {
     const s = setupCanvas(specCanvasRef.current);
@@ -1395,9 +1489,7 @@ export default function App() {
       ctx.fillText(label, 8, Math.max(11, y - 2));
       ctx.shadowBlur = 0;
     }
-
-    drawPlayheadLine(ctx, w, h);
-  }, [drawSelectionRect, drawPlayheadLine, tX]);
+  }, [drawSelectionRect, tX]);
 
   const drawRuler = useCallback(() => {
     const s = setupCanvas(rulerCanvasRef.current);
@@ -1435,7 +1527,7 @@ export default function App() {
       ctx.fillRect(sx, 0, ex - sx, h);
     }
 
-    const numRows = Math.max(1, ...items.map(it => (it.row ?? 0) + 1));
+    const numRows = visibleRowCount(items, t0, t1);
     const rowH = h / numRows;
     const inEdit = editModeRef.current;
     // Default tier chrome (no score / not edited). Selection brightens these same RGBs
@@ -1505,8 +1597,7 @@ export default function App() {
         ctx.restore();
       }
     }
-    drawPlayheadLine(ctx, w, h);
-  }, [tX, drawPlayheadLine]);
+  }, [tX]);
 
   const drawMinimap = useCallback(() => {
     const s = setupCanvas(minimapCanvasRef.current);
@@ -1544,6 +1635,12 @@ export default function App() {
     ctx.fillRect(Math.max(0, vx0), 2, Math.max(4, vx1 - vx0), h - 4);
   }, []);
 
+  // The playhead's single source of truth, regardless of play state — always shows a
+  // top-anchored handle + time badge (2026-08-18, replacing the old plain 1.5px line and
+  // the separate playing/paused split, where paused state was drawn per-panel via a now-
+  // removed drawPlayheadLine special case). Anchoring the badge to the handle at the top
+  // (rather than the bottom, as in the reference design this was modeled on) keeps both
+  // pieces together and unaffected by how tall the tiers area is resized to.
   const drawOverlay = useCallback(() => {
     const ov = overlayCanvasRef.current;
     const tl = timelineRef.current;
@@ -1561,16 +1658,48 @@ export default function App() {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, tw, th);
     const px = GUTTER + tX(playheadRef.current, tw - GUTTER);
-    if (px >= GUTTER && px <= tw) {
-      ctx.strokeStyle = '#3a7bd5'; ctx.lineWidth = 1.5;
-      ctx.beginPath(); ctx.moveTo(px, 0); ctx.lineTo(px, th); ctx.stroke();
-    }
-  }, [tX]);
+    if (px < GUTTER || px > tw) return;
 
-  const clearOverlay = useCallback(() => {
-    const ov = overlayCanvasRef.current;
-    if (ov) ov.getContext('2d').clearRect(0, 0, ov.width, ov.height);
-  }, []);
+    const COLOR = '#3a7bd5';
+    const HANDLE_R = 5;
+
+    // Line — starts below the handle so the handle reads as a distinct cap rather than
+    // a lump sitting on top of the line.
+    ctx.strokeStyle = COLOR; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(px, HANDLE_R * 2); ctx.lineTo(px, th); ctx.stroke();
+
+    // Handle — filled circle pinned to the very top of the timeline (y=0), so it's
+    // always fully visible no matter how the waveform/spectrogram/tiers split is sized.
+    ctx.fillStyle = COLOR;
+    ctx.beginPath(); ctx.arc(px, HANDLE_R, HANDLE_R, 0, Math.PI * 2); ctx.fill();
+
+    // Time badge — rounded pill showing the exact playhead position to millisecond
+    // precision (fmtTime already formats this way for the toolbar's own time display,
+    // so the two stay visually consistent). Vertically centered in the gap between the
+    // spectrogram panel and the tiers area (not pinned under the handle) — measured live
+    // via panelsDivRef/tiersDivRef so it stays correctly placed as that split is resized.
+    const label = fmtTime(playheadRef.current);
+    ctx.font = "11px 'JetBrains Mono',monospace";
+    const padX = 6, badgeH = 16;
+    const badgeW = ctx.measureText(label).width + padX * 2;
+    let badgeY = HANDLE_R * 2 + 4; // fallback: near the top, under the handle
+    if (panelsDivRef.current && tiersDivRef.current) {
+      const tlTop = tl.getBoundingClientRect().top;
+      const panelsBottom = panelsDivRef.current.getBoundingClientRect().bottom - tlTop;
+      const tiersTop = tiersDivRef.current.getBoundingClientRect().top - tlTop;
+      badgeY = (panelsBottom + tiersTop) / 2 - badgeH / 2;
+    }
+    // Clamp horizontally so the badge never overflows the left/right edge of the
+    // timeline even when the handle itself is near an edge.
+    const badgeX = Math.max(GUTTER, Math.min(tw - badgeW, px - badgeW / 2));
+    ctx.fillStyle = COLOR;
+    ctx.beginPath();
+    ctx.roundRect(badgeX, badgeY, badgeW, badgeH, badgeH / 2);
+    ctx.fill();
+    ctx.fillStyle = '#ffffff';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(label, badgeX + badgeW / 2, badgeY + badgeH / 2 + 0.5);
+  }, [tX]);
 
   const redraw = useCallback(() => {
     drawWave(); drawSpec(); drawRuler();
@@ -1582,8 +1711,9 @@ export default function App() {
     }
     drawMinimap();
     drawScrollbar();
+    drawOverlay();
     scheduleSpecPrefetchRef.current();
-  }, [drawWave, drawSpec, drawRuler, drawTier, drawMinimap, drawScrollbar]);
+  }, [drawWave, drawSpec, drawRuler, drawTier, drawMinimap, drawScrollbar, drawOverlay]);
 
   // dir: +1 (zoom in) or -1 (zoom out). Only drawWave() needs to rerun — this is the
   // one control in the app that provably affects only the waveform canvas.
@@ -1933,10 +2063,9 @@ export default function App() {
   const stopPlay = useCallback(() => {
     stopAudio();
     setPlaying(false);
-    clearOverlay();
     updateTimeDisplay();
-    redraw();
-  }, [stopAudio, clearOverlay, redraw, updateTimeDisplay]);
+    redraw(); // redraws the playhead overlay at its paused position too — see drawOverlay
+  }, [stopAudio, redraw, updateTimeDisplay]);
 
   const tick = useCallback((gen) => {
     // Stale-generation guard: if startPlay has been called again since this
@@ -1970,6 +2099,10 @@ export default function App() {
       desiredT0 = Math.round(desiredT0 / tPerPx) * tPerPx;
       desiredT0 = Math.max(0, Math.min(DUR - span, desiredT0));
     }
+    // redraw() now draws the overlay itself (see its definition), so both branches below
+    // keep the playhead marker in sync every tick — previously only the `else` branch
+    // did, so once auto-scroll kicked in (past the view's center) the marker stopped
+    // being drawn at all for the rest of playback, not just for one frame.
     if (playheadRef.current > t0 + half && Math.abs(desiredT0 - t0) > 1e-6) {
       viewRef.current = { t0: desiredT0, t1: desiredT0 + span };
       redraw();
@@ -2036,7 +2169,6 @@ export default function App() {
         }
         stopAudio();
         setPlaying(false);
-        clearOverlay();
         updateTimeDisplay();
         redraw();
       };
@@ -2050,7 +2182,7 @@ export default function App() {
     } else {
       doStart();
     }
-  }, [stopAudio, tick, clearOverlay, drawOverlay, redraw, updateTimeDisplay]);
+  }, [stopAudio, tick, drawOverlay, redraw, updateTimeDisplay]);
 
   // ── Data loading ──────────────────────────────────────────────────────
 
@@ -2075,6 +2207,12 @@ export default function App() {
       // Y-zoom is relative to this file's own peak — a new file shouldn't inherit the
       // previous file's manual multiplier.
       yZoomRef.current = 1;
+      // This ref must only ever point at the wav actually backing the current
+      // AudioBuffer. loadPublicPair re-sets it right after this call resolves (for the
+      // public/ auto-load path); for any other source (drag-and-drop, or the More menu's
+      // Load Wav) it must stay null so calcSpecForView/calcFormantForView's guard clauses
+      // correctly no-op instead of sending DSP requests against a stale filename.
+      publicWavFileRef.current = null;
     }
 
     audioBufferRef.current = buffer;
@@ -2098,7 +2236,6 @@ export default function App() {
     // partition the whole file — so this max-of-maxes is the exact full-file peak,
     // not an approximation, with no extra scan needed.
     fullPeakRef.current = filePeak;
-    rmsEnvRef.current = buildRmsEnvelope(buffer);
     redraw();
 
     if (buffer.duration > 1800) setMemoryWarning(true);
@@ -2182,6 +2319,13 @@ export default function App() {
       saveTimerRef.current = setTimeout(() => setSaveState(null), 2000);
     }
   }, []);
+
+  // Ctrl/Cmd+S entry point — gates saveTextGrid behind a one-time overwrite confirmation
+  // (skippable via the modal's "Don't ask me again" checkbox, persisted in localStorage).
+  const requestSave = useCallback(() => {
+    if (skipSaveConfirmRef.current) { saveTextGrid(); return; }
+    setShowSaveConfirm(true);
+  }, [saveTextGrid]);
 
   // ── Load a wav + optional textgrid from public/ by filename ──────────
   const loadPublicPair = useCallback(async (wavName, tgName) => {
@@ -2290,9 +2434,8 @@ export default function App() {
           startPlay(sel ? sel.t0 : playheadRef.current);
         }
       }
-      if ((e.ctrlKey || e.metaKey) && e.code === 'KeyS') { e.preventDefault(); saveTextGrid(); return; }
+      if ((e.ctrlKey || e.metaKey) && e.code === 'KeyS') { e.preventDefault(); requestSave(); return; }
       if (e.code === 'KeyL') { const n = !loopModeRef.current; loopModeRef.current = n; setLoopMode(n); }
-      if (e.code === 'KeyF') { viewRef.current = { t0: 0, t1: DUR }; redraw(); }
       if (e.code === 'KeyR' && !e.ctrlKey && !e.metaKey) { e.preventDefault(); calcSpecForView(); }
       // Edit mode hotkey — hardcoded to '1'.
       if (e.code === 'Digit1' || e.key === '1' || (e.code === 'Numpad1' && e.key === '1')) {
@@ -2409,7 +2552,7 @@ export default function App() {
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [stopPlay, startPlay, redraw, popUndo, pushUndo, commitTierItems, clearSelection, saveTextGrid, adjustYZoom, adjustFontScale, calcSpecForView, getAllTiers, syncSelectionState]);
+  }, [stopPlay, startPlay, redraw, popUndo, pushUndo, commitTierItems, clearSelection, requestSave, adjustYZoom, adjustFontScale, calcSpecForView, getAllTiers, syncSelectionState]);
 
   // ── Zoom ──────────────────────────────────────────────────────────────
 
@@ -2642,9 +2785,10 @@ export default function App() {
     const h = rect.height;
     const t = xT(x, w);
     const EDGE_PX = 6; // px within which we detect edge hover
-    const edgeT = (EDGE_PX / w) * (viewRef.current.t1 - viewRef.current.t0);
+    const { t0: viewT0, t1: viewT1 } = viewRef.current;
+    const edgeT = (EDGE_PX / w) * (viewT1 - viewT0);
 
-    const numRows = Math.max(1, ...items.map(it => (it.row ?? 0) + 1));
+    const numRows = visibleRowCount(items, viewT0, viewT1);
     const rowH = h / numRows;
 
     for (const item of items) {
@@ -3292,6 +3436,13 @@ export default function App() {
     fetchOverviewChunk(getChunkIndex(t0));
   }, [calcBaseSpec, drawSpec, computePaddedWindow, fetchEnhancedSpec, fetchOverviewChunk]);
 
+  const toggleEnvelope = useCallback(() => {
+    const n = !envelopeVisibleRef.current;
+    envelopeVisibleRef.current = n;
+    setEnvelopeVisible(n);
+    drawWave();
+  }, [drawWave]);
+
   // Estimated menu/submenu footprint used to keep the spectrogram context menu (and its
   // flyout submenus) from opening off-screen near the right/bottom edge of the viewport.
   const SPEC_CTX_MENU_W = 260;
@@ -3593,6 +3744,22 @@ export default function App() {
         </div>
       )}
 
+      {/* Save-overwrite confirmation — shown on Ctrl/Cmd+S unless the user opted out */}
+      {showSaveConfirm && (
+        <SaveConfirmModal
+          filename={tgFileNameRef.current + '.TextGrid'}
+          onCancel={() => setShowSaveConfirm(false)}
+          onConfirm={(dontAskAgain) => {
+            setShowSaveConfirm(false);
+            if (dontAskAgain) {
+              skipSaveConfirmRef.current = true;
+              try { localStorage.setItem('skipSaveConfirm', 'true'); } catch (_) {}
+            }
+            saveTextGrid();
+          }}
+        />
+      )}
+
       {/* File picker modal — shown when multiple wav/TextGrid files are in public/ */}
       {filePicker && (
         <FilePicker
@@ -3852,9 +4019,9 @@ export default function App() {
             {/* ── Overflow menu: Loop, Add Tier, Load TextGrid, theme toggle ── */}
             <div style={{ position: 'relative' }}>
               <button
-                className="btn"
+                className={`btn${loopMode ? ' active' : ''}`}
                 onClick={() => setShowMoreMenu(v => !v)}
-                title="More options"
+                title={loopMode ? 'More options (Loop is on — L to toggle)' : 'More options'}
                 aria-label="More options"
               >
                 More<span style={{ marginLeft: 5 }}>⋮</span>
@@ -3874,7 +4041,7 @@ export default function App() {
                   }}
                   onCloseTierManager={() => setShowTierManager(false)}
                   onLoadTextGrid={handleTGFile}
-                  theme={theme}
+                  onLoadWav={handleAudioFile}
                   onToggleTheme={() => setTheme(t => (t === 'dark' ? 'light' : 'dark'))}
                 />
               )}
@@ -3897,6 +4064,15 @@ export default function App() {
             </div>
             <div className="panel-body">
               <div className="panel-tag">Waveform</div>
+              <label className="envelope-toggle" title="Toggle the RMS envelope overlay">
+                <input
+                  type="checkbox"
+                  className="tier-visibility-check"
+                  checked={envelopeVisible}
+                  onChange={toggleEnvelope}
+                />
+                Envelope
+              </label>
               <canvas ref={waveCanvasRef} style={{ height: '100%' }} />
             </div>
           </div>

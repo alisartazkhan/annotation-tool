@@ -138,29 +138,6 @@ export function buildMelSpectrogram(audioBuffer, colormapFn = inferno) {
 }
 
 
-// ── RMS envelope ─────────────────────────────────────────────────────────
-
-export function buildRmsEnvelope(audioBuffer) {
-  const sr = audioBuffer.sampleRate;
-  const ch = audioBuffer.getChannelData(0);
-  const WIN = Math.round(sr / 100);
-  const frames = Math.floor((ch.length - WIN) / WIN) + 1;
-  const env = new Float32Array(frames);
-
-  for (let fr = 0; fr < frames; fr++) {
-    const off = fr * WIN;
-    let sum = 0;
-    for (let i = 0; i < WIN; i++) { const v = ch[off + i] || 0; sum += v * v; }
-    env[fr] = Math.sqrt(sum / WIN);
-  }
-
-  let mx = 0;
-  for (let i = 0; i < frames; i++) if (env[i] > mx) mx = env[i];
-  if (mx > 0) for (let i = 0; i < frames; i++) env[i] /= mx;
-
-  return { env, frames, hop: WIN, sr };
-}
-
 // ── LPC formant tracking ──────────────────────────────────────────────────
 
 function computeLpcCoeffs(frame, order) {
