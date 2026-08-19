@@ -108,7 +108,9 @@ def _colormap_lut(name, n=256):
         r = np.clip(1.5 - np.abs(4*ts - 3), 0, 1)
         g = np.clip(1.5 - np.abs(4*ts - 2), 0, 1)
         b = np.clip(1.5 - np.abs(4*ts - 1), 0, 1)
-        lut = np.stack([r, g, b], axis=1) * 255
+        rgb = np.stack([r, g, b], axis=1)
+        luma = rgb @ np.array([0.2126, 0.7152, 0.0722])
+        lut = np.rint((luma[:, None] + (rgb - luma[:, None]) * 0.72) * 0.82 * 255)
     elif name == "greys":
         lut = np.stack([ts, ts, ts], axis=1) * 255
     else:

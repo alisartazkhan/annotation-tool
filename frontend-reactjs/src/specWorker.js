@@ -61,11 +61,13 @@ const COLORMAPS = {
   viridis: t => lerpStops([[68,1,84],[72,40,120],[62,83,160],[49,120,165],[38,150,162],[53,183,121],[109,206,89],[180,222,44],[253,231,37]], t),
   jet: t => {
     t = Math.max(0, Math.min(1, t));
-    return [
-      Math.round(Math.max(0, Math.min(1, 1.5 - Math.abs(4*t - 3))) * 255),
-      Math.round(Math.max(0, Math.min(1, 1.5 - Math.abs(4*t - 2))) * 255),
-      Math.round(Math.max(0, Math.min(1, 1.5 - Math.abs(4*t - 1))) * 255),
+    const rgb = [
+      Math.max(0, Math.min(1, 1.5 - Math.abs(4*t - 3))),
+      Math.max(0, Math.min(1, 1.5 - Math.abs(4*t - 2))),
+      Math.max(0, Math.min(1, 1.5 - Math.abs(4*t - 1))),
     ];
+    const luma = rgb[0] * 0.2126 + rgb[1] * 0.7152 + rgb[2] * 0.0722;
+    return rgb.map(channel => Math.round((luma + (channel - luma) * 0.72) * 0.82 * 255));
   },
   greys: t => { const v = Math.round(Math.max(0, Math.min(1, t)) * 255); return [v, v, v]; },
 };

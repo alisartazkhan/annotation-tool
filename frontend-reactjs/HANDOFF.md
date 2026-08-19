@@ -27,7 +27,7 @@ On startup the app scans `public/` via a Vite dev-server middleware (`/api/publi
 
 Drop your own files onto the page, or use the Load buttons in the toolbar to load files at any time.
 
-IPA key layout is read from `public/ipa_keys.json` — a JSON object mapping IPA symbol strings to example-word strings (with `**bold**` markup for the key sound). This asset is expected at runtime but is not currently checked into `public/`; add it locally to enable the virtual keyboard.
+IPA key layout is read from `public/ipa_keys.json` — a JSON object mapping IPA symbol strings to example-word strings (with `**bold**` markup for the key sound). This file is checked into `public/` and ships with the repo, so the virtual keyboard works out of the box; edit it directly to change the key set.
 
 ---
 
@@ -53,7 +53,7 @@ dsp_server.py         Python DSP script: librosa linear-frequency STFT spectrogr
 public/
   *.wav               Audio files (one auto-loads; multiple open FilePicker)
   *.TextGrid          Optional annotation files (one auto-loads; multiple open FilePicker)
-  ipa_keys.json       Expected local IPA key map; currently not checked in
+  ipa_keys.json       IPA key map (checked into the repo); edit to change the virtual keyboard's key set
 ```
 
 ---
@@ -73,8 +73,10 @@ Every hot-path value has **both** a `useState` and a `useRef`. The state drives 
 | `editMode` | `editModeRef` | Edit vs select mode |
 | `loopMode` | `loopModeRef` | Loop playback |
 | `colormapName` | `colormapNameRef` | Spectrogram colormap |
-| `formantVisible` | `formantVisibleRef` | Per-formant overlay toggles (`{ f1, f2, f3 }`) |
+| `formantVisible` | `formantVisibleRef` | Per-formant/pitch overlay toggles (`{ f0, f1, f2, f3 }`) |
 | `playbackRate` | `playbackRateRef` | Playback speed multiplier |
+| `envelopeVisible` | `envelopeVisibleRef` | Waveform peak-envelope overlay toggle (see [Envelope toggle](#envelope-toggle-2026-08-18)) |
+| `autoPlayTile` | `autoPlayTileRef` | AUTO-PLAY checkbox — play a tile immediately on click |
 
 **Rule:** always update both together — `ref.current = n; setState(n)`.
 
@@ -98,7 +100,7 @@ All visuals are drawn on `<canvas>` elements via the Canvas 2D API. There is no 
 
 ### Timeline scrollbar
 
-A slim strip (`.scrollbar-strip`, 12px tall) sits directly below the waveform/spectrogram panels, above the tier-divider — full-width, with a 64px `.scrollbar-gutter` matching `.panel-gutter`/`.ruler-gutter`/`.minimap-gutter` so all rows stay vertically aligned. The playhead overlay's `GUTTER` constant in `drawOverlay()` must match this same 64px width.
+A slim strip (`.scrollbar-strip`, 6px tall) sits directly below the waveform/spectrogram panels, above the tier-divider — full-width, with a 112px `.scrollbar-gutter` matching `.panel-gutter`/`.tier-gutter`/`.ruler-gutter`/`.minimap-gutter` so all rows stay vertically aligned. The playhead overlay's `TIMELINE_GUTTER` constant in `drawOverlay()` must match this same 112px width.
 
 `drawScrollbar()` draws a track plus a highlighted thumb rect sized/positioned by `t0/DUR` and `(t1-t0)/DUR` — the same proportions the minimap's viewport box uses, but without the minimap's word-tick thumbnails.
 
@@ -106,7 +108,7 @@ Interaction is a standalone `useEffect` (mirrors the minimap's click/drag patter
 - **Click on the thumb** — drags relative to the grab point (`dragOffset`), so the view doesn't jump out from under the cursor.
 - **Click on bare track** — centers the thumb on the click point.
 - Thumb width is clamped to a 4px minimum so it stays draggable even when zoomed out to a tiny fraction of the full duration.
-- Like the minimap, `mousemove`/`mouseup` listeners are attached to `window` (not the canvas), so dragging keeps working even if the cursor leaves the thin 14px strip.
+- Like the minimap, `mousemove`/`mouseup` listeners are attached to `window` (not the canvas), so dragging keeps working even if the cursor leaves the thin 12px strip.
 
 ### View coordinates
 
@@ -175,7 +177,20 @@ const getTierType = (tierId) =>
 // Inside App component (useCallback)
 const commitTierItems = useCallback((tierId, updated) => {
   if (tierId === 'words') {
-    wordsRef.current = updated; setWords([...updated]);
+    // Word tier is special-cased: any item that's new, was already edited, or whose
+    // text/t0/t1 changed gets marked edited/score:2, capturing originalText once —
+    // see Score assignment for edited and new words below.
+    const prevById = new Map(wordsRef.current.map(it => [it.id, it]));
+    const marked = updated.map(it => {
+      const prev = prevById.get(it.id);
+      if (prev?.edited) return { ...it, edited: true, score: 2, originalText: prev.originalText };
+      if (!prev) return { ...it, edited: true, score: 2, originalText: '' };
+      if (prev.text !== it.text || prev.t0 !== it.t0 || prev.t1 !== it.t1) {
+        return { ...it, edited: true, score: 2, originalText: prev.text };
+      }
+      return it;
+    });
+    wordsRef.current = marked; setWords([...marked]);
   } else if (tierId === 'phones') {
     phonesRef.current = updated; setPhones([...updated]);
   } else {
@@ -187,7 +202,7 @@ const commitTierItems = useCallback((tierId, updated) => {
 }, []);
 ```
 
-Use `commitTierItems` for every tier write operation — it handles all three cases uniformly.
+Use `commitTierItems` for every tier write operation — it's the single place all three tier kinds get written from, though only `words` carries the edited/score/originalText bookkeeping shown above; `phones` and custom tiers are plain passthroughs.
 
 ### TextGrid parsing and serialisation
 
@@ -215,7 +230,7 @@ There is an always-visible bar at the top of the `.tiers` section with checkboxe
 
 **WRD/PHN divider** measures actual `getBoundingClientRect()` heights of `wrdTierRef` and `phnTierRef` to compute the fraction — do not use the parent container rect, as the visibility bar above the tiers throws off the math.
 
-**Custom tier dividers** are wired in the `useEffect([customTiers])` — each divider measures the tier above (`phnTierRef` for the first, or the previous custom tier's div ref) and the tier below.
+**Custom tier dividers** are wired inline in the JSX render, inside the `customTiers.map((tier, idx) => ...)` block — each divider gets its own `makeDragDivider(...)` call that measures the tier above (`phnTierRef` for the first, or the previous custom tier's div ref) and the tier below (`customTierDivRefs.current[tier.id]`).
 
 ---
 
@@ -263,9 +278,9 @@ Scaling](#tile-rendering--font-scaling)).
 
 ### Envelope toggle (2026-08-18)
 
-A checkbox + "Envelope" label (`.envelope-toggle`, reusing `.tier-visibility-check` for the checkbox itself so it matches the SHOW bar's checkboxes visually) sits in the top-right corner of the waveform panel's `.panel-body` (`position: absolute`, mirroring how `.panel-tag` already sits top-left) and controls whether `drawWave` draws the envelope overlay in the `samplesPerPx <= 200` zoom-level branch, over the min/max-per-column waveform fill. Dual state+ref as usual: `envelopeVisible`/`envelopeVisibleRef`, defaulting to `true` (unchanged from the old always-on behavior). `toggleEnvelope()` flips both and calls `drawWave()` directly — no need for a full `redraw()` since this only affects the waveform canvas, the same reasoning `adjustYZoom` already uses.
+Right-clicking the waveform opens a compact `WaveContextMenu` with a checked **Envelope** row. The row controls whether `drawWave` draws the envelope overlay in the `samplesPerPx <= 200` zoom-level branch, over the min/max-per-column waveform fill. Dual state+ref as usual: `envelopeVisible`/`envelopeVisibleRef`, defaulting to `true` (unchanged from the old always-on behavior). `toggleEnvelope()` flips both and calls `drawWave()` directly — no need for a full `redraw()` since this only affects the waveform canvas, the same reasoning `adjustYZoom` already uses. The former always-visible `.envelope-toggle` corner control and its CSS were removed on 2026-08-19 to reduce waveform clutter.
 
-**First attempt was a right-click `WaveContextMenu`** (mirroring `SpecContextMenu`'s pattern) — implemented correctly and functionally worked, but per user feedback a single toggle shouldn't be hidden behind a right-click; it needed to be visible at a glance. Replaced with the always-visible corner checkbox above. If more waveform display toggles are ever needed, reconsider a menu at that point rather than stacking more corner checkboxes.
+`handleWaveContextMenu` clamps the popup to the viewport using `WAVE_CTX_MENU_W`/`WAVE_CTX_MENU_H`, and opening either waveform or spectrogram context menu closes the other. The menu uses the shared reactive `.ctx-menu` styling and closes after toggling Envelope or clicking outside.
 
 **Rendering went through three iterations the same day**, each fixing a real problem the last one had:
 
@@ -273,7 +288,7 @@ A checkbox + "Envelope" label (`.envelope-toggle`, reusing `.tier-visibility-che
 2. **Per-pixel RMS.** Replaced the precomputed frame table with RMS computed live, per pixel column, from the exact same `[iA, iB]` sample range already scanned for the min/max fill (no extra pass needed) — this fixed the blockiness (now resolution-matched to the current zoom) and the scale mismatch (same units, same `gain`, as the waveform fill). But per-user feedback this still looked "big and blocky" in a different way: RMS over a single pixel-column's worth of samples is itself noisy sample-to-sample, and RMS is mathematically always `<= peak`, so it also read as visually short relative to the actual waveform peaks.
 3. **Peak-per-column + smoothing + fill (current).** `envPerCol[cx] = Math.max(mx, -mn)` — reuses the min/max fill's own per-column peak magnitude directly (again, no extra sample scan). This is then smoothed with a box-filter moving average (`~30ms` window, converted to pixels via `pxPerSec` so it scales with zoom; computed via a prefix-sum array so it's `O(w)` regardless of window size) before drawing, so the result reads as a loudness "swell" contour rather than tracking every sample-to-sample spike. Drawn as a single closed path (top contour left-to-right, then bottom contour right-to-left, `closePath()`) with both a semi-transparent fill and a stroked outline, rather than two independent stroked lines — matching a reference image the user provided of a smooth filled amplitude-envelope shape.
 
-**`ENVELOPE_GAIN_BOOST` (currently `2.2`)** — a multiplier applied only to the envelope's amplitude, on top of the waveform's own `gain`, clamped to `1` before scaling so a sustained full-scale passage can't push the smoothed contour past the panel's top/bottom edge. Added because peak-per-column + smoothing still reads shorter than the user wanted by default (smoothing itself pulls down isolated peaks) — this is the knob to retune if the envelope ever needs to look taller/shorter again. The `0.03` (seconds) a few lines above it in the same block is the smoothing window — smaller tracks the waveform more tightly (more jagged), larger gives a slower-moving swell.
+**`ENVELOPE_GAIN_BOOST` (currently `2.0`)** — a multiplier applied only to the envelope's amplitude, on top of the waveform's own `gain`, clamped to `1` before scaling so a sustained full-scale passage can't push the smoothed contour past the panel's top/bottom edge. Added because peak-per-column + smoothing still reads shorter than the user wanted by default (smoothing itself pulls down isolated peaks) — this is the knob to retune if the envelope ever needs to look taller/shorter again. The `0.03` (seconds) a few lines above it in the same block is the smoothing window — smaller tracks the waveform more tightly (more jagged), larger gives a slower-moving swell.
 
 **`buildRmsEnvelope()` was deleted from `dsp.js`** (along with `rmsEnvRef` and the `buildRmsEnvelope` import in `App.jsx`) once step 3 above made it fully unused — nothing else in the codebase referenced it.
 
@@ -316,7 +331,8 @@ and unshifted main-row keys and the numpad work regardless of layout.
 `drawTier` scales annotation text with tier height so tiles remain readable at any zoom level:
 
 ```js
-const fontSize = Math.round(Math.max(11, Math.min(24, rowH * 0.45)) * fontScaleRef.current);
+const maxFontSize = isWord ? 20 : 18;
+const fontSize = Math.round(Math.max(11, Math.min(maxFontSize, rowH * 0.34)) * fontScaleRef.current);
 const font = isWord
   ? `500 ${fontSize}px Inter,sans-serif`
   : `${Math.max(10, fontSize - 1)}px 'JetBrains Mono',monospace`;
@@ -325,6 +341,27 @@ ctx.fillText(item.text, (x0 + x1) / 2, ry + rowH / 2 + fontSize * 0.35);
 ```
 
 Word tiles use a slightly heavier weight (`500`); phoneme tiles use a monospace font one pixel smaller for density.
+
+### Visual tile polish (2026-08-19)
+
+The tier tiles were softened to match the cleaner reference UI without changing any edit/select behavior:
+
+- Default word/phone colors changed to muted sage/lavender constants in `App.jsx` (`DEFAULT_WORD_RGB = [126,157,102]`, `DEFAULT_PHONE_RGB = [150,124,184]`), and the shortcut-popover swatches continue to read from those constants.
+- `drawTier` now draws tiles with a small rounded-rectangle helper instead of square `fillRect`/`strokeRect` boxes. The radius is intentionally slight (max 5px) so the tiles read cleaner without becoming pill-shaped.
+- Default and score-colored tile fill/stroke alpha was reduced, with selected tiles still using higher alpha and a thicker stroke. This keeps confidence/edited colors meaningful while making ordinary WRD/PHN intervals less heavy.
+- Vertical tile padding scales up to 22px and word/phone text now caps at 20px/18px. Roomier tier rows therefore add whitespace instead of turning labels and tiles into oversized buttons.
+
+This is paint-only: hit-testing, dragging, snapping, selection, copy/paste, TextGrid serialization, and `commitTierItems` are unchanged.
+
+### Adjacent tile joins and muted Jet (2026-08-19)
+
+- `drawTier` builds a per-row adjacency map using interval timestamps (epsilon `1e-5`). When one tile ends exactly where the next begins, horizontal padding is removed at that shared edge and both touching corners are squared. The exposed ends of the run remain rounded. Actual timestamp gaps still render as whitespace.
+- The `jet` colormap is intentionally softer than canonical Jet: each generated RGB value is mixed 72% away from its luminance gray and then scaled to 82% brightness. Keep these factors synchronized in `src/dsp.js`, `src/specWorker.js`, and `dsp_server.py`; they cover the main-thread preview, worker cache, and enhanced Python spectrogram respectively.
+- This does not merge annotation items or alter interval boundaries. Tile hit-testing and edits continue to use the original `t0`/`t1` values.
+
+### Dark-mode tile contrast (2026-08-19)
+
+Tile labels intentionally remain near-black in both themes. To keep them legible on the dark canvas, `drawTier` lightens every dark-mode tile RGB 38% toward white and uses a substantially more opaque fill (`0.82` normally, `0.92` selected; `0.78` outside edit mode). Light-mode tile colors and opacity are unchanged. This transformation happens only while painting: score values, edited state, shortcut legend colors, and serialized annotations are unaffected.
 
 ### Manual font-size control (2026-07-24)
 
@@ -478,7 +515,7 @@ The resulting `selectedTilesRef` map can contain entries from any number of tier
 
 ### Visual feedback
 
-- In edit mode, selected tiles keep their existing hue (score / edited / default tier chrome) and only “pop”: higher fill alpha (~0.55) + a full-opacity stroke at 2px. Selection no longer swaps words to accent blue or phones to a separate purple highlight. In non-edit mode, clicking a tile still sets the play region and tier outline, but `drawTier` does not apply selected-tile fill/stroke.
+- In edit mode, selected tiles keep their existing hue (score / edited / default tier chrome) and only “pop”: higher fill alpha (0.56–0.60, vs. 0.22–0.32 unselected depending on tier/edit-mode/tile kind) + a thicker stroke at 2px. Selection no longer swaps words to accent blue or phones to a separate purple highlight. In non-edit mode, clicking a tile still sets the play region and tier outline, but `drawTier` does not apply selected-tile fill/stroke.
 - The `.tier` div for any tier containing a selected tile gets an `outline`:
   - Words: `rgba(58,123,213,0.7)`
   - Phones / custom: `rgba(60,200,130,0.7)`
@@ -623,7 +660,7 @@ const savedTextGridRef       = useRef(null);  // serialized baseline after load 
 
 ### Data format
 
-`public/ipa_keys.json` is expected to be a JSON **object** (not an array) mapping each IPA symbol to an example word string. The current repository does not ship this file, so create/copy it into `public/` to enable the keyboard:
+`public/ipa_keys.json` is a JSON **object** (not an array) mapping each IPA symbol to an example word string. The file is checked into `public/` and ships with the repo; edit it directly to change the key set:
 
 ```json
 {
@@ -638,7 +675,7 @@ const savedTextGridRef       = useRef(null);  // serialized baseline after load 
 }
 ```
 
-`**…**` markup renders bold in the tooltip. JSON must have no trailing comma after the last entry (strict parser).
+`**…**` markup renders bold in the tooltip. JSON must have no trailing comma after the last entry (strict parser). `loadIpaKeys()` also accepts a legacy array format for backward compatibility (`Array.isArray(data) ? Object.fromEntries(data.map(k => [k, null])) : data`), but the object format above is what's shipped and expected for new keysets.
 
 ### Components
 
@@ -885,14 +922,14 @@ formantTrackRef.current = {
 
 **Y-axis matches the spectrogram exactly.** Formant/pitch dots use the same mel-scale mapping as the spectrogram's own frequency-axis ticks — `melHz = 2595·log10(1 + hz/700)`, `FMAX = min(8000, ft.sr/2)` for the dots vs. a flat `8000` for the tick labels (equal in practice for any file with sample rate ≥16kHz, which is effectively all of them). A dot at a given y-position lines up with the frequency-axis labels and the spectrogram pixels directly behind it — there's no independent scaling to keep in sync. Typical adult F0 (75–600 Hz, per `PITCH_FLOOR_HZ`/`PITCH_CEILING_HZ`) renders low on the mel-warped axis, near the bottom of the panel.
 
-### Per-track toggles (2026-07-27, moved into the right-click menu 2026-08-17)
+### Per-track toggles (2026-07-27, moved to the direct strip 2026-08-19)
 
-Four independent checkboxes — **F1**, **F2**, **F3**, **Pitch (F0)**, all inline under "Formants" — each showing/hiding that track's dot/line overlay; see [Spectrogram right-click menu](#spectrogram-right-click-menu-2026-08-17) below. State lives in `formantVisibleRef`/`formantVisible` (dual state+ref, `{ f0, f1, f2, f3 }` booleans, **default all `false`** — nothing is drawn until a checkbox is checked, unlike the old toolbar buttons which defaulted to all `true`). `toggleFormant(key)` flips one and redraws. There's no "All" control anymore (the old toolbar's fourth button) — dropped as dead weight once the menu made checking three individual boxes trivial.
+Four independent checkboxes — **F1**, **F2**, **F3**, **Pitch (F0)** — each show/hide that track's dot/line overlay. They live in the compact top-right `.spec-track-toggles` strip and share the existing `toggleSpecTrack(key)` handler. State lives in `formantVisibleRef`/`formantVisible` (dual state+ref, `{ f0, f1, f2, f3 }` booleans, **default all `false`** — nothing is drawn until a checkbox is checked). `toggleFormant(key)` flips one and redraws. There's no "All" control.
 
 Two call paths now fetch formant/pitch data, split specifically so a checkbox click never clobbers the other tracks' visibility:
 - **`fetchFormantData()`** — the shared fetch, no visibility side effects. POSTs to `/api/compute-dsp` with `kind: 'formants'` and stores the result in `formantTrackRef`; returns `true`/`false` so callers can bail out on failure.
 - **`calcFormantForView()`** — the menu's "⟳ Regenerate formants & pitch" item. Calls `fetchFormantData()`, then unconditionally sets all four tracks visible (mirrors the old toolbar's auto-enable-on-generate behavior) and redraws.
-- **`toggleSpecTrack(key)`** — a Formants/Pitch checkbox's `onChange`. If `formantTrackRef.current` is still `null` (nothing generated yet for this view), calls `fetchFormantData()` first; either way, then calls `toggleFormant(key)` for **only** that one key. This is why it's a separate path from `calcFormantForView`: reusing that function here would have reset every track to visible on first use, undoing whichever tracks the user had already unchecked.
+- **`toggleSpecTrack(key)`** — a direct F0/F1/F2/F3 checkbox's `onChange`. If `formantTrackRef.current` is still `null` (nothing generated yet for this view), calls `fetchFormantData()` first; either way, then calls `toggleFormant(key)` for **only** that one key. This is why it's a separate path from `calcFormantForView`: reusing that function here would have reset every track to visible on first use, undoing whichever tracks the user had already unchecked.
 
 ### Legacy worker
 
@@ -900,18 +937,18 @@ Two call paths now fetch formant/pitch data, split specifically so a checkbox cl
 
 ### Spectrogram right-click menu (2026-08-17)
 
-Right-clicking the spectrogram canvas (`onContextMenu` on `specCanvasRef`) opens `SpecContextMenu` — a React-rendered popup, **not** the imperative `document.createElement` pattern the tier canvases' right-click menu uses (see [Key Invariants](#key-invariants-and-non-obvious-constraints)) — chosen specifically because this menu needs reactive checked/selected state (checkboxes, a colormap radio list) rather than a flat list of one-shot actions. It replaced the old always-visible `.spec-overlay-btns` floating panel (colormap `<select>` + Force Refresh button + Generate Formants card) entirely — none of that JSX or its CSS (`.spec-overlay-btns`, `.formant-card*`) still exists.
+Right-clicking the spectrogram canvas (`onContextMenu` on `specCanvasRef`) opens `SpecContextMenu` — a React-rendered popup, **not** the imperative `document.createElement` pattern the tier canvases' right-click menu uses (see [Key Invariants](#key-invariants-and-non-obvious-constraints)) — chosen because the active colormap radio row is reactive. It replaced the old always-visible `.spec-overlay-btns` floating panel (colormap `<select>` + Force Refresh button + Generate Formants card) entirely — none of that JSX or its CSS (`.spec-overlay-btns`, `.formant-card*`) still exists.
+
+**Direct track strip (2026-08-19).** A small `.spec-track-toggles` overlay is always visible in the spectrogram's top-right corner and is the only UI for F0/F1/F2/F3 visibility; colormap, refresh, and regeneration remain in the context menu. The strip uses fixed dark translucent chrome for contrast over every colormap, with 13px unfilled boxes and thin track-colored checks/active labels matching `SPEC_CTX_TRACK_COLORS` and `drawSpec`.
 
 Menu structure:
-- **Spectrogram settings ▸** — submenu: "↻ Force Refresh" (`calcSpecForView`) and "⟳ Regenerate formants & pitch" (`calcFormantForView`).
-- **Colormap ▸** — submenu: Jet / Inferno / Viridis / Greys as a radio list (`●` marks the active one), calling the existing `handleColormapChange`.
-- **Formants** — a plain label (not a submenu) followed by inline **F1**/**F2**/**F3**/**Pitch (F0)** checkboxes, all at the same level (no submenu for F0 — an earlier version nested it under its own "Pitch ▸" submenu per the original mockup, but that was simplified to a plain checkbox per user feedback 2026-08-17).
+- **Spectrogram settings** — a section label followed directly by "↻ Force Refresh" (`calcSpecForView`) and "⟳ Regenerate formants & pitch" (`calcFormantForView`).
+- **Colormap** — a section label followed directly by Jet / Inferno / Viridis / Greys radio rows (`●` marks the active one), calling the existing `handleColormapChange`.
+- **No track checkboxes** — F0/F1/F2/F3 visibility is intentionally kept out of the context menu and controlled only by the top-right strip.
 
 There's no "Reset view" item currently — it existed briefly (backed by a `resetSpecView()` callback that set `viewRef.current = { t0: 0, t1: durationRef.current }; redraw();`, the same view-reset logic the `F` keyboard shortcut used to trigger) but was pulled per user feedback 2026-08-17 pending a decision on whether/where it belongs. The `F` shortcut itself was removed entirely (2026-08-18, along with its `SHORTCUTS`/USAGE.md rows) rather than kept as a shortcut-only affordance with no discoverable UI trigger, so `viewRef.current = { t0: 0, t1: durationRef.current }; redraw();` is now the only surviving reference for this logic if a "Reset view" control is ever added back.
 
-All four checkboxes call `toggleSpecTrack(key)` (see "Per-track toggles" above) and deliberately do **not** close the menu, so multiple tracks can be toggled in one right-click session; the two submenu leaf actions call `onClose()` after running.
-
-**Submenu flyout is pure CSS**, not React state: `.ctx-menu__item--parent:hover > .ctx-menu__submenu { display: block; }`. No hover state is tracked in JS. The one piece of placement logic that does need JS is edge-avoidance — `handleSpecContextMenu` (`App.jsx`) computes `flip: e.clientX > window.innerWidth - SPEC_CTX_MENU_W` at click time and clamps `y` to `window.innerHeight - SPEC_CTX_MENU_H`, so the menu (and its rightward-opening submenus) don't get clipped by the right/bottom edge of the viewport; `flip` swaps every submenu to `.ctx-menu__submenu--flip` (`right: 100%` instead of `left: 100%`) for that one open menu instance. `SPEC_CTX_MENU_W`/`_H` are rough estimates of the menu's on-screen footprint, not measured — if the menu's real size changes significantly, retune these two constants.
+The menu has no flyouts. Choosing a settings action or colormap closes it after invoking the existing callback. `handleSpecContextMenu` clamps both `x` and `y` using the rough `SPEC_CTX_MENU_W`/`_H` footprint constants so the single popup stays inside the viewport; retune those constants if the menu's real size changes significantly.
 
 Dismissal follows the same pattern as the tier context menu: a `document`-level `mousedown` listener closes the menu on any click outside `menuRef.current`.
 
@@ -953,7 +990,7 @@ Each `startPlay` call increments `playGenRef.current` and passes the new generat
 `onended` fires at the exact audio sample boundary — always before the next 16.7 ms RAF frame. The last tick therefore leaves the playhead a few ms short of the end. Two places pin it:
 
 1. **`tick`**: if `t >= playEndAtRef.current`, sets `playheadRef.current = playEndAtRef.current` and keeps looping the RAF until `onended` fires (does not let the position exceed the end).
-2. **`onended`**: unconditionally sets `playheadRef.current = playEndAtRef.current` and calls `drawOverlay()` before doing anything else (loop restart or stop).
+2. **`onended`**: after its two early-return guards (stale generation, manual pause — see below), sets `playheadRef.current = playEndAtRef.current` and calls `drawOverlay()` before doing anything else (loop restart or stop).
 
 ### Playhead overlay marker (2026-08-18)
 
@@ -971,6 +1008,12 @@ Each `startPlay` call increments `playGenRef.current` and passes the new generat
 
 ```js
 src.onended = () => {
+  // Stale source — a new startPlay has already taken over. Must be checked first
+  // (see the src.onended invariant below for why).
+  if (gen !== playGenRef.current) return;
+  // playingRef already false means stopAudio() was called manually (pause) — don't
+  // pin the playhead to the end in that case, leave it where the user paused.
+  if (!playingRef.current) return;
   playheadRef.current = playEndAtRef.current;  // pin first
   updateTimeDisplay();
   drawOverlay();
@@ -1009,7 +1052,7 @@ Word tiles are normally colored by `item.score` via `scoreColor(score, alpha)`. 
 - 0.5 → yellow `rgb(255, 200, 50)`
 - `scoreColor(1)` → light green `rgb(115, 225, 142)` (used by the dashboard legend)
 
-On the tier canvas and minimap, an **exact** `score === 1` is special-cased to `SCORE_ONE_GREEN = rgb(42, 166, 78)` instead of using the lightened end of `scoreColor`. Items without a score fall back to the muted default tile hues (`DEFAULT_WORD_RGB = rgb(112,143,88)`, `DEFAULT_PHONE_RGB = rgb(143,114,181)`). The dashboard legend calls `scoreColor(0)`/`scoreColor(0.5)`/`scoreColor(1)` directly, so its 1.0 endpoint is the light green above rather than `SCORE_ONE_GREEN`.
+On the tier canvas and minimap, an **exact** `score === 1` is special-cased to `SCORE_ONE_GREEN = rgb(42, 166, 78)` instead of using the lightened end of `scoreColor`. Items without a score fall back to the muted default tile hues (`DEFAULT_WORD_RGB = rgb(126,157,102)`, `DEFAULT_PHONE_RGB = rgb(150,124,184)`). The dashboard legend calls `scoreColor(0)`/`scoreColor(0.5)`/`scoreColor(1)` directly, so its 1.0 endpoint is the light green above rather than `SCORE_ONE_GREEN`.
 
 ### Edited word rendering
 
@@ -1118,9 +1161,9 @@ The edit mode hotkey is hardcoded to `1` in the keydown handler. The check match
   --kbd-*                                          /* shortcut-key chip styling (shortcuts popover) */
   --card-bg, --card-label                         /* remnants of the removed formant-card HUD — --card-bg is still used by the (currently unreferenced) .calc-spec-btn */
   --warn-*, --error-*, --save-*                   /* status-color families (keep hue across themes) */
-  --mfa-*, --export-*, --tier-*                   /* semantic button families (keep hue across themes) */
+  --mfa-*, --export-*                             /* semantic button families (keep hue across themes) */
   --mono                                /* "JetBrains Mono", monospace */
-  --toolbar-btn-h                       /* 28px */
+  --toolbar-btn-h                       /* 32px */
 }
 ```
 
@@ -1140,22 +1183,50 @@ Notable component classes:
 | `.tier--selected` | Selected-tier outline glow — color supplied via the `--outline-color` inline custom property, not a hardcoded per-tier value |
 | `.confidence-dashboard` | `ConfidenceDashboard` sidebar chrome |
 | `.btn-undo-redo` | Undo/redo toolbar buttons — `font-size: 21px`, `transform: scaleY(-1)` flips the `↩`/`↪` glyphs' hook to curve upward |
-| `.toolbar-group` / `--left`/`--center`/`--right` | 3-part media-player toolbar layout (2026-08-17) — see [Toolbar layout & overflow menu](#toolbar-layout--overflow-menu-2026-08-17-toolbar-cleanup) |
+| `.toolbar-group` / `--left`/`--center`/`--right` | Structural wrappers flattened into one evenly spaced responsive toolbar — see [Toolbar layout & overflow menu](#toolbar-layout--overflow-menu-2026-08-17-toolbar-cleanup) |
 | `.toolbar-divider` | 1px vertical rule separating sub-clusters within the center/right toolbar groups |
 | `.toast--info` | Accent-tinted toast variant (2026-08-17), used by the loop-selection toast |
 
-`.panel-divider` and `.tier-divider` share one rule. `.panel-gutter` and `.tier-gutter` share a base rule and are all 64px wide; `.tier-gutter` adds `flex-direction: column`, left alignment, and the optional `.gutter-subtitle` row.
+`.panel-divider` and `.tier-divider` share one rule. `.panel-gutter` and `.tier-gutter` share a base rule and are all 112px wide; `.tier-gutter` adds `flex-direction: column`, left alignment, and the optional `.gutter-subtitle` row.
+
+**Divider cleanup (updated 2026-08-19).** `.panel-divider`/`.tier-divider` are 4px transparent resize targets. They become a low-alpha accent only on hover/drag, preserving an easy grab area without leaving permanent rules between rows. `makeDragDivider` (`App.jsx`) still reads the container's `getBoundingClientRect()` and tracks movement on `window`; only the visual treatment changed.
+
+### Visual grouping: WAV/SPEC vs. WRD/PHN (2026-08-18)
+
+Per a reference image the user provided, WAV+SPEC(+ruler) now read as one continuous block, visually separated from a second WRD+PHN(+custom tiers) block, rather than five evenly-bordered rows with no visual hierarchy:
+
+- **`.panel`'s own `border-bottom` was removed** (and the now-pointless `.panel:last-child { border-bottom: none; }` rule along with it) — the wave/spectrogram boundary now relies solely on the thin `.panel-divider` resize handle, instead of double-lining it with both the panel's own border and the divider right next to each other.
+- **`.tier`'s own `border-bottom` was removed** the same way — WRD/PHN (and custom tier) boundaries now rely solely on their own `.tier-divider` resize handles.
+- **`.tiers` gained `margin-top`** — opens a blank gap between the ruler and the WRD row, reading as the boundary between the two groups. Flex items never collapse margins with each other, so this is a reliable, simple way to add spacing without a new DOM element. Does not affect the panels/tiers resize math in `makeDragDivider`, which measures live `getBoundingClientRect()` calls, not this CSS.
+
+Net effect: within each group, adjacent rows/panels touch with visually hidden resize targets; between groups, there's a deliberate visible gap and no shared border.
+
+### Visual grouping refinement (2026-08-19)
+
+Follow-up passes against the latest reference screenshots:
+
+- Default vertical allocation is `.panels { flex: 0.60; min-height: 220px; }`, `.tiers { flex: 0.40; min-height: 220px; }`. This leaves a large annotation workspace while retaining a substantial signal block. The user can still drag the divider afterward; this only changes first-load/default sizing.
+- The internal WAV/SPEC split starts at `panelSplitRef = 0.25`, making the waveform compact and the spectrogram the primary signal view by default.
+- `.timeline-body` uses the app background and the WAV/SPEC/WRD/PHN groups use `--bg-panel`, so the gap between panels and tiers reads as intentional whitespace rather than another dark row.
+- `.tiers` uses an 8px whitespace break with no top border, and the tier visibility bar has no bottom rule. Permanent panel/tier divider lines are also gone; their transparent resize targets appear only on hover.
+- `drawRuler` uses a sparse step (`>= 125px` per label, starting at 0.25s), draws labels without tick marks, and preserves fractional seconds in minute-format labels so zoomed views do not repeat ambiguous values such as `2:16`.
+- The navigation scrollbar is 6px tall with no surrounding borders, and the playhead line is a quieter 1px translucent stroke while its handle and time badge remain solid.
+- Redundant `Waveform`/`Mel Spectrogram` in-canvas tags were removed because the WAV/SPEC gutters already identify the panels. Spectrogram guide lines were reduced to very low opacity.
+- The default spectrogram colormap is now `viridis` instead of `jet`, reducing visual intensity while keeping all four colormap choices available from the context menu.
+- The shared timeline gutter is 112px across WAV/SPEC/ruler/scrollbar/WRD/PHN/custom tiers/minimap, with `TIMELINE_GUTTER` matching it in `drawOverlay`. This gives `Phonemes` enough width without shifting any annotation timing. WAV, SPEC, WRD, and PHN share the same 16px left text anchor; WAV/SPEC occupy a 48px identity column, while the spectrogram y-axis labels use the remaining gutter space and its canvas retains faint frequency guide lines.
+
+This pass is still visual-only. No toolbar actions, shortcuts, save/export/MFA/DSP behavior, or annotation data semantics changed.
 
 ### Visual-only polish pass (2026-08-17)
 
 This pass was intentionally **presentation-only**: no handlers, keyboard shortcuts, TextGrid logic, DSP requests, MFA queueing, save/export behavior, or data models changed. It moved the UI toward the provided audio-editor references by changing CSS and canvas draw styling:
 
 - Toolbar: increased the bar height/padding, made the GSA mark larger, made Play the one prominent circular control, gave the time display more room, softened flat toolbar button hover states, and kept action groups visually separated with `.toolbar-divider`.
-- Timeline layout: changed the default `.panels`/`.tiers` split from a spectrogram-dominant layout to `0.70` / `0.30`, made the minimap 50px tall, and made the ruler 28px tall.
+- Timeline layout: changed the default `.panels`/`.tiers` split from a spectrogram-dominant layout to `0.70` / `0.30`, made the minimap 40px tall (reduced from 50px on 2026-08-19), and made the ruler 28px tall.
 - Gutters: widened every gutter to 64px, relabeled the waveform gutter from `WV` to `WAV`, the spectrogram gutter to `SPEC`, and added `Words` / `Phonemes` subtitles under `WRD` / `PHN`.
 - Tier controls: replaced the tier-visibility bar's inline style block with `.tier-visibility-bar`, `.tier-visibility-title`, `.tier-visibility-label`, `.tier-text-size-controls`, and `.tier-visibility-spacer`.
-- Canvas styling: playhead lines are now accent blue, waveform strokes/RMS overlays are softer, dark canvas backgrounds are closer to black-blue, tile text is dark on the now-more-opaque tiles, and default word/phone tile hues are muted sage/lavender rather than blue/purple.
-- Menus/popovers: `.ctx-menu` and submenus got larger padding, softer rounded corners, stronger shadow, and row hover styling via `--row-active-bg`.
+- Canvas styling: playhead lines are now accent blue, waveform strokes/RMS overlays are softer, dark canvas backgrounds are closer to black-blue, tile text is dark on the softened rounded tiles, and default word/phone tile hues are muted sage/lavender rather than blue/purple.
+- Menus/popovers: `.ctx-menu` got larger padding, softer rounded corners, a stronger shadow, and row hover styling via `--row-active-bg`.
 
 Keep the visual-only boundary in mind for follow-up polish: this is a styling layer over the same timeline/editor behavior. If a future change needs to alter interaction semantics, document it outside this section.
 
@@ -1176,18 +1247,17 @@ These rules are scoped with a `.toolbar` ancestor selector (`.toolbar .btn`, not
 
 ### Toolbar layout & overflow menu (2026-08-17 toolbar cleanup)
 
-Per user request ("fewer pills, less color" + a classic 3-part "media player" layout), the toolbar was restructured and its remaining buttons flattened (no visible background/border by default, just a hover/active tint — overrides the base `.btn` pill look that popovers/modals still use).
+The toolbar keeps its flat button treatment (no visible background/border by default, just a hover/active tint — overriding the base `.btn` pill look used by popovers/modals). Its original three structural wrappers remain in JSX but are flattened for layout as described below.
 
-**Three-part layout** — `.toolbar-group--left`/`--center`/`--right`:
+**Flat responsive layout** — the `.toolbar-group--left`/`--center`/`--right` wrappers remain in JSX for ownership/readability but no longer create layout columns (updated 2026-08-19):
 ```css
-.toolbar-group--left, .toolbar-group--right { flex: 1 1 0; min-width: 0; }
-.toolbar-group--left  { justify-content: flex-start; }
-.toolbar-group--right { justify-content: flex-end; }
-.toolbar-group--center { flex: 0 0 auto; }
+.toolbar { justify-content: space-between; flex-wrap: wrap; }
+.toolbar > .toolbar-group { display: contents; }
+.toolbar-group--right > .toolbar-group { display: contents; }
 ```
-Left and right groups each take an equal share of the remaining space and push their content to their own outer edge, which centers the unstretched, auto-width center group between them regardless of how wide the left/right content is — simpler than an equivalent CSS grid (`1fr auto 1fr`) and keeps `.toolbar`'s existing `flex-wrap` safety net for narrow windows.
+The toolbar now has one formatting context instead of three columns. On wide screens, `space-between` distributes spare width between the logo/status, Undo/Redo cluster, transport cluster, zoom cluster, and Scores/MFA/Export/More. As the viewport narrows, that distributed space collapses to the explicit column gap; after it is exhausted, controls wrap in source order. Undo/Redo retains its 2px internal gap, transport uses 7px, and Zoom −/slider/+ uses 5px, so related controls stay close while clusters remain evenly distributed. Positioning wrappers needed by the logo shortcut popover, MFA queue, Export popover, and More menu remain atomic. At widths below 1350px, horizontal padding, the time display, and zoom slider still tighten.
 - **Left**: logo + save indicator.
-- **Center**: Undo/Redo (own tight `.undo-redo-group`, 2px gap, separated from the rest by the group's own gap rather than a divider) → `.toolbar-divider` → transport (Play/Stop/time/Speed) → Zoom row. Kept together as one block so it visually centers under the timeline regardless of how wide the left/right groups are.
+- **Former center sequence**: compact Undo/Redo cluster → `.toolbar-divider` → compact Play/Stop/time/Speed transport cluster → compact Zoom out/slider/Zoom in cluster.
 - **Right**: Scores, MFA (+ queue dropdown) → `.toolbar-divider` → Export (+ popover), **More** (`⋮`) overflow button.
 
 **`.toolbar-divider`** — a plain 1px `var(--border-ui2)` vertical rule, 28px tall, visually separating sub-clusters within the center and right groups.
@@ -1239,13 +1309,13 @@ Unlike `showDashboard`/`mfaQueueOpen` (still UI-only, no ref), `theme` **is** re
 
 | Function | Dark literal | Light literal | What it's for |
 |---|---|---|---|
-| `drawWave` | `#0d0d10` | `#ffffff` | Canvas background fill |
-| `drawTier` | `#13131a` | `#ffffff` | Canvas background fill |
-| `drawTier` | `#c8c6c1` | `#1c1c20` | Tile text (`fillText`) — `#1c1c20` matches light-theme `--text` |
-| `drawMinimap` | `#0c0c0f` | `#ffffff` | Canvas background fill |
+| `drawWave` | `#070b0f` | `#ffffff` | Canvas background fill |
+| `drawTier` | `#0d1015` | `#ffffff` | Canvas background fill |
+| `drawTier` | `#05070a` | `#1c1c20` | Tile text (`fillText`) — `#1c1c20` matches light-theme `--text` |
+| `drawMinimap` | `#080b0f` | `#ffffff` | Canvas background fill |
 | `drawMinimap` | `rgba(255,255,255,0.06)` | `rgba(0,0,0,0.06)` | Viewport-highlight overlay tint — a white tint is invisible on a white background, so light mode darkens instead of lightens |
-| `drawScrollbar` | `#0c0c0f` | `#ffffff` | Canvas background fill |
-| `drawRuler` | `#13131a` | `#ffffff` | Canvas background fill — tick-mark stroke (`#2a2a30`) and label text (`#45454d`) are left as-is, since dark-gray-on-white already reads fine and didn't need a light variant |
+| `drawScrollbar` | `#080b0f` | `#ffffff` | Canvas background fill |
+| `drawRuler` | `#0d1015` | `#ffffff` | Canvas background fill — tick and label colors are also lightly branched for the sparse-ruler visual pass |
 
 The point of the exception: the waveform plot, the tier tiles, and the time ruler now share the same white background in light mode (previously several different hardcoded darks), and the scrollbar-strip/minimap backgrounds match the surrounding light chrome instead of staying dark islands. Everything else in these five functions — waveform stroke/RMS fill, tile fill/stroke colors by score/selection/edit state, minimap word-tick colors, scrollbar thumb color (`#3a3a42`, left as-is — reads fine against white), ruler ticks/labels — remains an untouched dark-mode literal. Do not widen this exception without a specific reason; see the frozen-dark boundary below for what's still off-limits.
 
@@ -1266,11 +1336,11 @@ The point of the exception: the waveform plot, the tier tiles, and the time rule
 ```
 This must stay in `index.html`, not move into a React effect — React can't run before its own bundle loads and hydrates, so any React-side theme application would flash the wrong theme first on every load. The `useState` initializer above reads the same `data-theme` attribute this script already set (not `localStorage` again independently), so there's no way for the two to disagree on first render.
 
-**Token conventions**: generic surface/text tokens (`--bg-surface`, `--border-surface`, `--bg-tooltip`, `--text-soft`, `--accent-rgb` for `rgba(var(--accent-rgb), alpha)` blends) extend the pre-existing `:root` convention. Semantic brand-color families — `--mfa-*` (green), `--export-*` (green), `--tier-*` (blue), `--warn-*`/`--error-*`/`--save-*` (status colors) — get their **own** light-mode-adjusted values rather than being swept into the generic tokens, since they need to keep their hue meaning in both themes. Literal `#fff`/`#000` is left alone (not tokenized) wherever text is contrast-matched to a *fixed* accent color rather than to the page background (e.g. white text on the always-blue Play button) — correct in both themes by construction.
+**Token conventions**: generic surface/text tokens (`--bg-surface`, `--border-surface`, `--bg-tooltip`, `--text-soft`, `--accent-rgb` for `rgba(var(--accent-rgb), alpha)` blends) extend the pre-existing `:root` convention. Semantic brand-color families — `--mfa-*` (green), `--export-*` (green), `--warn-*`/`--error-*`/`--save-*` (status colors) — get their **own** light-mode-adjusted values rather than being swept into the generic tokens, since they need to keep their hue meaning in both themes. Tier-selection outline color is not a `:root` token at all — it's supplied per-element via an inline `--outline-color` custom property (see `.tier--selected` above). Literal `#fff`/`#000` is left alone (not tokenized) wherever text is contrast-matched to a *fixed* accent color rather than to the page background (e.g. white text on the always-blue Play button) — correct in both themes by construction.
 
-**Frozen-dark boundary — do not add theme awareness beyond the table above**: `drawSelectionRect`, `drawSpec` (including its inline frequency-axis drawing), `drawOverlay` (removed 2026-08-18: `drawPlayheadLine`, the separate paused-state playhead line drawn inside `drawWave`/`drawSpec`/`drawTier` — `drawOverlay` is now the only place the playhead is drawn, in any play state), and `drawSnapGuide` remain entirely theme-unaware, as do `src/dsp.js`, `src/specWorker.js`, `scoreColor()` and every call site (tile fills, `ConfidenceDashboard`'s stat values/histogram/lowest-confidence rows), and `ConfidenceDashboard`'s hardcoded gradient legend (mirrors the frozen canvas confidence scale). `drawWave`/`drawTier`/`drawMinimap`/`drawScrollbar`/`drawRuler` themselves are *not* fully off-limits anymore — only their background fill (plus `drawTier`'s tile text and `drawMinimap`'s viewport tint) is in scope, per the exception above; every other color decision inside those five functions is still frozen. The colormap→label-color table inside `drawSpec` (jet=black/inferno=white/viridis=white/greys=black) is about legibility against each *spectrogram colormap*, not the app theme — leave it alone too.
+**Frozen-dark boundary — do not add theme awareness beyond the table above**: `drawSelectionRect`, `drawSpec` (including its faint inline frequency guides), `drawOverlay` (removed 2026-08-18: `drawPlayheadLine`, the separate paused-state playhead line drawn inside `drawWave`/`drawSpec`/`drawTier` — `drawOverlay` is now the only place the playhead is drawn, in any play state), and `drawSnapGuide` remain entirely theme-unaware, as do `src/dsp.js`, `src/specWorker.js`, `scoreColor()` and every call site for scored confidence coloring, and `ConfidenceDashboard`'s hardcoded gradient legend (mirrors the frozen canvas confidence scale). `drawWave`/`drawTier`/`drawMinimap`/`drawScrollbar`/`drawRuler` themselves are *not* fully off-limits anymore — background fills are in scope per the exception above, `drawTier` has the documented rounded/default-tile visual polish, and `drawRuler` has the documented sparse-ruler visual polish. Frequency labels are theme-aware DOM text in `.panel-gutter`, outside the canvas.
 
-**In scope despite sitting next to canvases**: `.minimap`/`.scrollbar-strip`/`*-gutter` div backgrounds (these are DOM chrome behind/beside the canvas, not `fillStyle` calls) — these are DOM elements, not canvas draw calls, so they already pick up the shared `.ctx-menu`/`--bg-surface`/`--border-surface` tokens like any other popover. (The old `.formant-card`/`.spec-overlay-btns` floating HUD this note used to reference was removed 2026-08-17 — see [Spectrogram right-click menu](#spectrogram-right-click-menu-2026-08-17).)
+**In scope despite sitting next to canvases**: `.minimap`/`.scrollbar-strip`/`*-gutter` div backgrounds (these are DOM chrome behind/beside the canvas, not `fillStyle` calls). The old `.formant-card`/`.spec-overlay-btns` settings HUD was removed 2026-08-17; the 2026-08-19 `.spec-track-toggles` strip is a deliberately fixed-dark exception because it sits directly over arbitrary spectrogram colormaps and needs stable contrast in both app themes. See [Spectrogram right-click menu](#spectrogram-right-click-menu-2026-08-17).
 
 ---
 
@@ -1278,7 +1348,7 @@ This must stay in `index.html`, not move into a React effect — React can't run
 
 - **`data-theme` must live on `<html>`, never a wrapper div inside `#root`.** The tier context menu is appended straight to `document.body`, a sibling of `#root` — only `<html>`-level scoping puts it inside the themed subtree.
 
-- **Canvas draw functions, `dsp.js`, `specWorker.js`, and `scoreColor()` must stay frozen dark, except the narrow `themeRef` exception in `drawWave`/`drawTier`/`drawMinimap`/`drawScrollbar`/`drawRuler`'s background fill (plus `drawTier`'s tile text and `drawMinimap`'s viewport tint).** See "Theming" under CSS for the full table. If you touch any *other* color logic in a `draw*` function while working on something else, that's a sign you've wandered outside the intended scope of the theming system — check the frozen-dark boundary list before proceeding.
+- **Canvas draw functions, `dsp.js`, `specWorker.js`, and `scoreColor()` must stay frozen dark, except the documented `themeRef` background/text exceptions plus the 2026-08-19 rounded-tile and sparse-ruler visual polish.** See "Theming" under CSS for the full table. If you touch any *other* color logic in a `draw*` function while working on something else, that's a sign you've wandered outside the intended scope of the theming system — check the frozen-dark boundary list before proceeding.
 
 - **`themeRef` must be kept in sync with `theme` state** (dual state+ref rule) **and the theme-change effect must call `redraw()`.** `drawWave`/`drawTier`/`drawMinimap`/`drawScrollbar`/`drawRuler` read `themeRef.current` directly; without the `redraw()` call in the effect, toggling the theme button wouldn't repaint those backgrounds until some other trigger (scroll, edit) happened to redraw them.
 

@@ -270,8 +270,15 @@ const EDITED_GREEN = [0, 169, 165]; // #00A9A5
 // Words with a perfect (1.0) confidence score get this exact tone instead of the
 // lightened end of the scoreColor() gradient, so they read as clearly "max confidence".
 const SCORE_ONE_GREEN = [42, 166, 78]; // #2AA64E
-const DEFAULT_WORD_RGB = [112, 143, 88];
-const DEFAULT_PHONE_RGB = [143, 114, 181];
+const DEFAULT_WORD_RGB = [126, 157, 102];
+const DEFAULT_PHONE_RGB = [150, 124, 184];
+const TIMELINE_GUTTER = 112;
+const SPEC_AXIS_FMAX = 8000;
+const SPEC_AXIS_TICKS = [100, 200, 500, 1000, 2000, 4000, 8000].map(hz => ({
+  hz,
+  label: hz >= 1000 ? `${hz / 1000} kHz` : `${hz} Hz`,
+  position: 100 * (1 - (2595 * Math.log10(1 + hz / 700)) / (2595 * Math.log10(1 + SPEC_AXIS_FMAX / 700))),
+}));
 
 // Swatch colors for the ShortcutsPopover's tile-color legend (TILE_COLOR_LEGEND in
 // shortcuts.js). word/phone must stay in sync with drawTier's `defaultRgb` literals.
@@ -303,6 +310,27 @@ function scoreColor(score, alpha = 1) {
 
 function rgbaFromRgb(rgb, alpha) {
   return alpha < 1 ? `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${alpha})` : `rgb(${rgb[0]},${rgb[1]},${rgb[2]})`;
+}
+
+function lightenRgb(rgb, amount) {
+  return rgb.map(channel => Math.round(channel + (255 - channel) * amount));
+}
+
+function roundedRect(ctx, x, y, w, h, r, roundLeft = true, roundRight = true) {
+  const radius = Math.max(0, Math.min(r, w / 2, h / 2));
+  const leftRadius = roundLeft ? radius : 0;
+  const rightRadius = roundRight ? radius : 0;
+  ctx.beginPath();
+  ctx.moveTo(x + leftRadius, y);
+  ctx.lineTo(x + w - rightRadius, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + rightRadius);
+  ctx.lineTo(x + w, y + h - rightRadius);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - rightRadius, y + h);
+  ctx.lineTo(x + leftRadius, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - leftRadius);
+  ctx.lineTo(x, y + leftRadius);
+  ctx.quadraticCurveTo(x, y, x + leftRadius, y);
+  ctx.closePath();
 }
 
 function pixelsToCanvas(res) {
@@ -685,19 +713,44 @@ const SPEC_CTX_COLORMAPS = [
   ['jet', 'Jet'], ['inferno', 'Inferno'], ['viridis', 'Viridis'], ['greys', 'Greys'],
 ];
 // Must match the dot/line colors drawSpec uses for each track (see the tracks/formants
-// arrays there) — this menu's checkbox labels are colored the same so a track's color
-// in the menu tells you which dots/line on the canvas it controls.
+// arrays there) so the direct spectrogram toggles identify their canvas overlays.
 const SPEC_CTX_TRACK_COLORS = { f0: '#f0c828', f1: '#ff5050', f2: '#50dc50', f3: '#5090ff' };
+const SPEC_TRACK_TOGGLES = [
+  ['f0', 'F0', 'Pitch (F0)'],
+  ['f1', 'F1', 'First formant (F1)'],
+  ['f2', 'F2', 'Second formant (F2)'],
+  ['f3', 'F3', 'Third formant (F3)'],
+];
 
-// Right-click menu on the spectrogram — replaces the old always-visible colormap
-// dropdown + Force Refresh/Generate Formants buttons (see HANDOFF.md, "Spectrogram
-// context menu"). Renders as JSX (unlike the tier canvases' imperative
-// document.createElement context menu) since it needs reactive checked/selected state
-// for the checkboxes and colormap radio rows, not just a flat list of one-shot actions.
+function WaveContextMenu({ x, y, onClose, envelopeVisible, onToggleEnvelope }) {
+  const menuRef = useRef(null);
+  useEffect(() => {
+    const dismiss = (e) => { if (menuRef.current && !menuRef.current.contains(e.target)) onClose(); };
+    document.addEventListener('mousedown', dismiss);
+    return () => document.removeEventListener('mousedown', dismiss);
+  }, [onClose]);
+
+  return (
+    <div ref={menuRef} className="ctx-menu" style={{ left: x, top: y, minWidth: 170 }}>
+      <div className="ctx-menu__label">Waveform</div>
+      <div
+        className="ctx-menu__item ctx-menu__checkbox-row"
+        role="menuitemcheckbox"
+        aria-checked={envelopeVisible}
+        onClick={() => { onToggleEnvelope(); onClose(); }}
+      >
+        <input type="checkbox" checked={envelopeVisible} readOnly tabIndex={-1} />
+        Envelope
+      </div>
+    </div>
+  );
+}
+
+// Right-click menu on the spectrogram — keeps settings and colormap choices in one
+// flat, reactive menu. Track visibility lives in the direct top-right toggle strip.
 function SpecContextMenu({
-  x, y, flip, onClose,
+  x, y, onClose,
   colormapName, onColormapChange,
-  formantVisible, onToggleTrack,
   specComputing, onForceRefreshSpec,
   formantComputing, onRegenerateFormants,
 }) {
@@ -708,47 +761,25 @@ function SpecContextMenu({
     return () => document.removeEventListener('mousedown', dismiss);
   }, [onClose]);
 
-  const submenuClass = `ctx-menu__submenu${flip ? ' ctx-menu__submenu--flip' : ''}`;
-
-  const trackCheckbox = (key, label) => (
-    <label key={key} className="ctx-menu__item ctx-menu__checkbox-row">
-      <input type="checkbox" checked={!!formantVisible[key]} onChange={() => onToggleTrack(key)} />
-      <span style={{ color: SPEC_CTX_TRACK_COLORS[key] }}>{label}</span>
-    </label>
-  );
-
   return (
     <div ref={menuRef} className="ctx-menu" style={{ left: x, top: y, minWidth: 200 }}>
-      <div className="ctx-menu__item ctx-menu__item--parent">
-        Spectrogram settings
-        <div className={submenuClass}>
-          <div className="ctx-menu__item" onClick={() => { onClose(); onForceRefreshSpec(); }}>
-            {specComputing ? '⟳ Refreshing…' : '↻ Force Refresh'}
-          </div>
-          <div className="ctx-menu__item" onClick={() => { onClose(); onRegenerateFormants(); }}>
-            {formantComputing ? '⟳ Generating…' : '⟳ Regenerate formants & pitch'}
-          </div>
-        </div>
+      <div className="ctx-menu__label">Spectrogram settings</div>
+      <div className="ctx-menu__item" onClick={() => { onClose(); onForceRefreshSpec(); }}>
+        {specComputing ? '⟳ Refreshing…' : '↻ Force Refresh'}
       </div>
-      <div className="ctx-menu__item ctx-menu__item--parent">
-        Colormap
-        <div className={submenuClass}>
-          {SPEC_CTX_COLORMAPS.map(([name, label]) => (
-            <div key={name} className="ctx-menu__item ctx-menu__radio-row" onClick={() => { onColormapChange(name); onClose(); }}>
-              <span className="ctx-menu__radio">{colormapName === name ? '●' : ''}</span>
-              {label}
-            </div>
-          ))}
-        </div>
+      <div className="ctx-menu__item" onClick={() => { onClose(); onRegenerateFormants(); }}>
+        {formantComputing ? '⟳ Generating…' : '⟳ Regenerate formants & pitch'}
       </div>
 
       <div className="ctx-menu__sep" />
 
-      <div className="ctx-menu__label">Formants</div>
-      {trackCheckbox('f1', 'F1')}
-      {trackCheckbox('f2', 'F2')}
-      {trackCheckbox('f3', 'F3')}
-      {trackCheckbox('f0', 'Pitch (F0)')}
+      <div className="ctx-menu__label">Colormap</div>
+      {SPEC_CTX_COLORMAPS.map(([name, label]) => (
+        <div key={name} className="ctx-menu__item ctx-menu__radio-row" onClick={() => { onColormapChange(name); onClose(); }}>
+          <span className="ctx-menu__radio">{colormapName === name ? '●' : ''}</span>
+          {label}
+        </div>
+      ))}
     </div>
   );
 }
@@ -993,12 +1024,13 @@ export default function App() {
   const [zoomValue, setZoomValue]       = useState(72);
   const [popup, setPopup]               = useState(null);
   const [dropping, setDropping]         = useState(false);
-  const [colormapName, setColormapName] = useState('jet');
+  const [colormapName, setColormapName] = useState('viridis');
   const [envelopeVisible, setEnvelopeVisible] = useState(true);
   const [formantVisible, setFormantVisible] = useState({ f0: false, f1: false, f2: false, f3: false });
   const [specComputing, setSpecComputing] = useState(false);
   const [formantComputing, setFormantComputing] = useState(false);
-  const [specCtxMenu, setSpecCtxMenu]   = useState(null); // { x, y, flip } | null — right-click menu on the spectrogram
+  const [waveCtxMenu, setWaveCtxMenu]   = useState(null); // { x, y } | null — right-click menu on the waveform
+  const [specCtxMenu, setSpecCtxMenu]   = useState(null); // { x, y } | null — right-click menu on the spectrogram
   const [editMode, setEditMode]         = useState(true);
   const [labelEditor, setLabelEditor]   = useState(null); // { id, tierId, tierType, text, x, y, boxW }
   const [showDashboard, setShowDashboard] = useState(false);
@@ -1037,7 +1069,7 @@ export default function App() {
   const mfaProcessingRef = useRef(false);
   const playbackRateRef = useRef(1);
 
-  const panelSplitRef  = useRef(0.45);
+  const panelSplitRef  = useRef(0.25);
   const wavePanelRef   = useRef(null);
   const specPanelRef   = useRef(null);
   const wrdTierRef     = useRef(null);
@@ -1091,7 +1123,7 @@ export default function App() {
   const customCanvasRefs = useRef({}); // keyed by tier id
   const customTierDivRefs = useRef({}); // keyed by tier id — the .tier div element
   const durationRef      = useRef(70);
-  const colormapNameRef  = useRef('jet');
+  const colormapNameRef  = useRef('viridis');
   const envelopeVisibleRef = useRef(true); // whether drawWave draws the RMS envelope overlay
   const formantVisibleRef = useRef({ f0: false, f1: false, f2: false, f3: false }); // which formant/pitch dot-tracks are drawn
   const formantTrackRef  = useRef(null);
@@ -1469,25 +1501,12 @@ export default function App() {
         }
       }
     }
-    // Frequency axis labels — color chosen to contrast against each colormap's background
-    const labelColor = { jet: '#000000', inferno: '#ffffff', viridis: '#ffffff', greys: '#000000' }[colormapNameRef.current] ?? '#ffffff';
-    const shadowColor = { jet: '#ffffff', inferno: '#000000', viridis: '#000020', greys: '#ffffff' }[colormapNameRef.current] ?? '#000000';
-    const FMAX = 8000;
-    const melMax = 2595 * Math.log10(1 + FMAX / 700);
-    const ticks = [100, 200, 500, 1000, 2000, 4000, 8000];
-    ctx.font = "10px 'JetBrains Mono',monospace";
-    ctx.textAlign = 'left';
-    for (const hz of ticks) {
-      const melHz = 2595 * Math.log10(1 + hz / 700);
-      const y = Math.round(h - (melHz / melMax) * h) + 0.5;
-      ctx.strokeStyle = 'rgba(255,255,255,0.07)';
+    // Keep only quiet frequency guides in the plot; labels live in the shared gutter.
+    for (const { position } of SPEC_AXIS_TICKS) {
+      const y = Math.round((position / 100) * h) + 0.5;
+      ctx.strokeStyle = 'rgba(255,255,255,0.035)';
       ctx.lineWidth = 1;
       ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
-      const label = hz >= 1000 ? `${hz / 1000} kHz` : `${hz} Hz`;
-      ctx.shadowColor = shadowColor; ctx.shadowBlur = 3;
-      ctx.fillStyle = labelColor;
-      ctx.fillText(label, 8, Math.max(11, y - 2));
-      ctx.shadowBlur = 0;
     }
   }, [drawSelectionRect, tX]);
 
@@ -1498,18 +1517,21 @@ export default function App() {
     const { t0, t1 } = viewRef.current;
     ctx.fillStyle = themeRef.current === 'light' ? '#ffffff' : '#0d1015'; ctx.fillRect(0, 0, w, h);
     const span = t1 - t0, pxPerSec = w / span;
-    const steps = [0.1, 0.25, 0.5, 1, 2, 5, 10, 30];
-    const step = steps.find(st => st * pxPerSec >= 70) || 30;
+    const steps = [0.25, 0.5, 1, 2, 5, 10, 30, 60];
+    const step = steps.find(st => st * pxPerSec >= 125) || 60;
     const first = Math.ceil(t0 / step) * step;
-    ctx.fillStyle = themeRef.current === 'light' ? '#69707c' : '#858b96';
+    ctx.fillStyle = themeRef.current === 'light' ? '#5f6874' : '#858b96';
     ctx.font = "10px 'JetBrains Mono',monospace"; ctx.textAlign = 'center';
-    ctx.strokeStyle = themeRef.current === 'light' ? '#d8dde5' : '#2a3038'; ctx.lineWidth = 1;
     for (let t = first; t <= t1 + step; t = +(t + step).toFixed(6)) {
       const x = Math.round(tX(t, w));
-      ctx.beginPath(); ctx.moveTo(x, h - 6); ctx.lineTo(x, h); ctx.stroke();
-      const label = t >= 60
-        ? `${Math.floor(t / 60)}:${String(Math.round(t % 60)).padStart(2, '0')}`
-        : `${step < 1 ? t.toFixed(1) : Math.round(t)}s`;
+      let label;
+      if (t >= 60) {
+        const precision = step < 0.5 ? 2 : step < 1 ? 1 : 0;
+        const seconds = (t % 60).toFixed(precision).padStart(precision ? 3 + precision : 2, '0');
+        label = `${Math.floor(t / 60)}:${seconds}`;
+      } else {
+        label = `${step < 0.5 ? t.toFixed(2) : step < 1 ? t.toFixed(1) : Math.round(t)}s`;
+      }
       ctx.fillText(label, x, h - 8);
     }
   }, [tX]);
@@ -1530,14 +1552,35 @@ export default function App() {
     const numRows = visibleRowCount(items, t0, t1);
     const rowH = h / numRows;
     const inEdit = editModeRef.current;
+    const isDark = themeRef.current !== 'light';
     // Default tier chrome (no score / not edited). Selection brightens these same RGBs
     // rather than swapping to a fixed accent color.
     const defaultRgb  = isWord ? DEFAULT_WORD_RGB : DEFAULT_PHONE_RGB;
     const strokeColor = rgbaFromRgb(defaultRgb, isWord ? 0.58 : 0.52); // hover-edge restore
-    const fontSize    = Math.round(Math.max(11, Math.min(24, rowH * 0.45)) * fontScaleRef.current);
+    const maxFontSize = isWord ? 20 : 18;
+    const fontSize    = Math.round(Math.max(11, Math.min(maxFontSize, rowH * 0.34)) * fontScaleRef.current);
     const font        = isWord ? `500 ${fontSize}px Inter,sans-serif` : `${Math.max(10, fontSize - 1)}px 'JetBrains Mono',monospace`;
     const hoverEdge   = hoverEdgeRef.current;
     const selTiles    = selectedTilesRef.current;
+    const adjacencyById = new Map();
+    const itemsByRow = new Map();
+    for (const item of items) {
+      const row = item.row ?? 0;
+      if (!itemsByRow.has(row)) itemsByRow.set(row, []);
+      itemsByRow.get(row).push(item);
+    }
+    for (const rowItems of itemsByRow.values()) {
+      rowItems.sort((a, b) => a.t0 - b.t0 || a.t1 - b.t1);
+      for (let i = 0; i < rowItems.length; i++) {
+        const item = rowItems[i];
+        const prev = rowItems[i - 1];
+        const next = rowItems[i + 1];
+        adjacencyById.set(item.id, {
+          joinsLeft: Boolean(prev && Math.abs(prev.t1 - item.t0) <= 1e-5),
+          joinsRight: Boolean(next && Math.abs(item.t1 - next.t0) <= 1e-5),
+        });
+      }
+    }
 
     for (const item of items) {
       if (item.t1 < t0 || item.t0 > t1) continue;
@@ -1563,21 +1606,40 @@ export default function App() {
 
       let fillAlpha;
       let strokeAlpha;
-      if (kind === 'default') {
-        fillAlpha = isSelected ? 0.78 : (inEdit ? (isWord ? 0.70 : 0.66) : (isWord ? 0.54 : 0.50));
-        strokeAlpha = isSelected ? 1 : (isWord ? 0.76 : 0.68);
+      if (isDark) {
+        fillAlpha = isSelected ? 0.92 : (inEdit ? 0.82 : 0.78);
+        strokeAlpha = isSelected ? 0.98 : 0.84;
+      } else if (kind === 'default') {
+        fillAlpha = isSelected ? 0.56 : (inEdit ? (isWord ? 0.28 : 0.26) : (isWord ? 0.24 : 0.22));
+        strokeAlpha = isSelected ? 0.82 : (isWord ? 0.38 : 0.34);
       } else {
-        fillAlpha = isSelected ? 0.78 : (inEdit ? 0.68 : 0.54);
-        strokeAlpha = (isSelected || kind === 'solid') ? 1 : 0.75;
+        fillAlpha = isSelected ? 0.60 : (inEdit ? 0.32 : 0.26);
+        strokeAlpha = (isSelected || kind === 'solid') ? 0.82 : 0.44;
       }
-      const fill = rgbaFromRgb(rgb, fillAlpha);
-      const stroke = rgbaFromRgb(rgb, strokeAlpha);
-      const tilePadY = Math.max(4, Math.min(9, rowH * 0.16));
+      const paintRgb = isDark ? lightenRgb(rgb, 0.38) : rgb;
+      const fill = rgbaFromRgb(paintRgb, fillAlpha);
+      const stroke = rgbaFromRgb(paintRgb, strokeAlpha);
+      const tilePadY = Math.max(8, Math.min(22, rowH * 0.22));
+      const exposedPadX = Math.max(2, Math.min(4, bw * 0.02));
+      const { joinsLeft = false, joinsRight = false } = adjacencyById.get(item.id) || {};
+      const leftPadX = joinsLeft ? 0 : exposedPadX;
+      const rightPadX = joinsRight ? 0 : exposedPadX;
       const tileH = Math.max(1, rowH - tilePadY * 2);
+      const tileX = x0 + leftPadX;
+      const tileY = ry + tilePadY;
+      const tileW = Math.max(0, bw - leftPadX - rightPadX);
+      if (tileW <= 0 || tileH <= 0) continue;
+      const radius = Math.min(5, Math.max(2, tileH * 0.12));
       ctx.fillStyle = fill;
-      ctx.fillRect(x0 + 1, ry + tilePadY, Math.max(0, bw - 2), tileH);
+      roundedRect(ctx, tileX, tileY, tileW, tileH, radius, !joinsLeft, !joinsRight);
+      ctx.fill();
       ctx.strokeStyle = stroke; ctx.lineWidth = isSelected ? 2 : (inEdit ? 1.5 : 1);
-      ctx.strokeRect(x0 + 1.5, ry + tilePadY + 0.5, Math.max(0, bw - 3), Math.max(0, tileH - 1));
+      roundedRect(
+        ctx, tileX + 0.5, tileY + 0.5,
+        Math.max(0, tileW - 1), Math.max(0, tileH - 1),
+        radius, !joinsLeft, !joinsRight,
+      );
+      ctx.stroke();
 
       if (inEdit) {
         const isHovered = hoverEdge && hoverEdge.id === item.id;
@@ -1631,8 +1693,8 @@ export default function App() {
     ctx.fillStyle = themeRef.current === 'light' ? '#ffffff' : '#080b0f'; ctx.fillRect(0, 0, w, h);
     if (!DUR) return;
     const vx0 = (t0 / DUR) * w, vx1 = (t1 / DUR) * w;
-    ctx.fillStyle = themeRef.current === 'light' ? '#9aa3b2' : '#535b66';
-    ctx.fillRect(Math.max(0, vx0), 2, Math.max(4, vx1 - vx0), h - 4);
+    ctx.fillStyle = themeRef.current === 'light' ? '#a9b0bc' : '#626b77';
+    ctx.fillRect(Math.max(0, vx0), 1, Math.max(4, vx1 - vx0), Math.max(1, h - 2));
   }, []);
 
   // The playhead's single source of truth, regardless of play state — always shows a
@@ -1645,7 +1707,7 @@ export default function App() {
     const ov = overlayCanvasRef.current;
     const tl = timelineRef.current;
     if (!ov || !tl) return;
-    const GUTTER = 64;
+    const GUTTER = TIMELINE_GUTTER;
     const dpr = window.devicePixelRatio || 1;
     const tw = tl.offsetWidth, th = tl.offsetHeight;
     if (ov.width !== Math.round(tw * dpr) || ov.height !== Math.round(th * dpr)) {
@@ -1665,7 +1727,7 @@ export default function App() {
 
     // Line — starts below the handle so the handle reads as a distinct cap rather than
     // a lump sitting on top of the line.
-    ctx.strokeStyle = COLOR; ctx.lineWidth = 1.5;
+    ctx.strokeStyle = 'rgba(58,123,213,0.62)'; ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(px, HANDLE_R * 2); ctx.lineTo(px, th); ctx.stroke();
 
     // Handle — filled circle pinned to the very top of the timeline (y=0), so it's
@@ -2016,7 +2078,7 @@ export default function App() {
     }
   }, []);
 
-  // "Regenerate formants & pitch" (Spectrogram settings submenu) — always re-fetches
+  // "Regenerate formants & pitch" (spectrogram context menu) — always re-fetches
   // for the current view and shows every track, regardless of prior toggle state.
   const calcFormantForView = useCallback(async () => {
     const ok = await fetchFormantData();
@@ -2027,7 +2089,7 @@ export default function App() {
     drawSpec();
   }, [fetchFormantData, drawSpec]);
 
-  // A Formants/Pitch checkbox click (spectrogram right-click menu) — fetches once, the
+  // A direct F0/F1/F2/F3 checkbox click — fetches once, the
   // first time any track is requested for the current view, then only ever toggles the
   // one track the user clicked (never forces the others on/off).
   const toggleSpecTrack = useCallback(async (key) => {
@@ -3443,16 +3505,26 @@ export default function App() {
     drawWave();
   }, [drawWave]);
 
-  // Estimated menu/submenu footprint used to keep the spectrogram context menu (and its
-  // flyout submenus) from opening off-screen near the right/bottom edge of the viewport.
-  const SPEC_CTX_MENU_W = 260;
-  const SPEC_CTX_MENU_H = 300;
+  const WAVE_CTX_MENU_W = 190;
+  const WAVE_CTX_MENU_H = 90;
+  const handleWaveContextMenu = useCallback((e) => {
+    e.preventDefault();
+    setSpecCtxMenu(null);
+    setWaveCtxMenu({
+      x: Math.max(8, Math.min(e.clientX, window.innerWidth - WAVE_CTX_MENU_W - 8)),
+      y: Math.max(8, Math.min(e.clientY, window.innerHeight - WAVE_CTX_MENU_H - 8)),
+    });
+  }, []);
+
+  // Estimated footprint keeps the flat spectrogram menu inside the viewport.
+  const SPEC_CTX_MENU_W = 220;
+  const SPEC_CTX_MENU_H = 285;
   const handleSpecContextMenu = useCallback((e) => {
     e.preventDefault();
+    setWaveCtxMenu(null);
     setSpecCtxMenu({
-      x: e.clientX,
-      y: Math.min(e.clientY, window.innerHeight - SPEC_CTX_MENU_H),
-      flip: e.clientX > window.innerWidth - SPEC_CTX_MENU_W, // open submenus leftward near the right edge
+      x: Math.max(8, Math.min(e.clientX, window.innerWidth - SPEC_CTX_MENU_W - 8)),
+      y: Math.max(8, Math.min(e.clientY, window.innerHeight - SPEC_CTX_MENU_H - 8)),
     });
   }, []);
 
@@ -4058,22 +4130,22 @@ export default function App() {
         <div className="panels" ref={panelsDivRef}>
           <div className="panel" ref={wavePanelRef} style={{ flex: panelSplitRef.current }}>
             <div className="panel-gutter panel-gutter--wave">
-              <button className="panel-gutter-btn" onClick={() => { focusedPanelRef.current = 'waveform'; adjustYZoom(1); }} title="Zoom in (waveform amplitude)">+</button>
-              <span className="gutter-label">WAV</span>
-              <button className="panel-gutter-btn" onClick={() => { focusedPanelRef.current = 'waveform'; adjustYZoom(-1); }} title="Zoom out (waveform amplitude)">−</button>
+              <div className="panel-gutter__identity panel-gutter__identity--controls">
+                <button className="panel-gutter-btn" onClick={() => { focusedPanelRef.current = 'waveform'; adjustYZoom(1); }} title="Zoom in (waveform amplitude)">+</button>
+                <span className="gutter-label">WAV</span>
+                <button className="panel-gutter-btn" onClick={() => { focusedPanelRef.current = 'waveform'; adjustYZoom(-1); }} title="Zoom out (waveform amplitude)">−</button>
+              </div>
             </div>
             <div className="panel-body">
-              <div className="panel-tag">Waveform</div>
-              <label className="envelope-toggle" title="Toggle the RMS envelope overlay">
-                <input
-                  type="checkbox"
-                  className="tier-visibility-check"
-                  checked={envelopeVisible}
-                  onChange={toggleEnvelope}
+              <canvas ref={waveCanvasRef} style={{ height: '100%' }} onContextMenu={handleWaveContextMenu} />
+              {waveCtxMenu && (
+                <WaveContextMenu
+                  x={waveCtxMenu.x} y={waveCtxMenu.y}
+                  onClose={() => setWaveCtxMenu(null)}
+                  envelopeVisible={envelopeVisible}
+                  onToggleEnvelope={toggleEnvelope}
                 />
-                Envelope
-              </label>
-              <canvas ref={waveCanvasRef} style={{ height: '100%' }} />
+              )}
             </div>
           </div>
           <div
@@ -4089,16 +4161,45 @@ export default function App() {
             )}
           />
           <div className="panel" ref={specPanelRef} style={{ flex: 1 - panelSplitRef.current }}>
-            <div className="panel-gutter"><span className="gutter-label">SPEC</span></div>
+            <div className="panel-gutter panel-gutter--axis">
+              <div className="panel-gutter__identity"><span className="gutter-label">SPEC</span></div>
+              <div className="axis-labels" aria-hidden="true">
+                {SPEC_AXIS_TICKS.map(({ hz, label, position }) => (
+                  <span
+                    key={hz}
+                    className="axis-label"
+                    style={{ '--axis-position': `${position}%` }}
+                  >
+                    {label}
+                  </span>
+                ))}
+              </div>
+            </div>
             <div className="panel-body">
-              <div className="panel-tag">Mel Spectrogram</div>
               <canvas ref={specCanvasRef} style={{ height: '100%' }} onContextMenu={handleSpecContextMenu} />
+              <div className="spec-track-toggles" role="group" aria-label="Spectrogram tracks">
+                {SPEC_TRACK_TOGGLES.map(([key, label, title]) => (
+                  <label
+                    key={key}
+                    className="spec-track-toggle"
+                    title={`Toggle ${title}`}
+                    style={{ '--track-color': SPEC_CTX_TRACK_COLORS[key] }}
+                  >
+                    <input
+                      type="checkbox"
+                      className="spec-track-check"
+                      checked={!!formantVisible[key]}
+                      onChange={() => toggleSpecTrack(key)}
+                    />
+                    <span>{label}</span>
+                  </label>
+                ))}
+              </div>
               {specCtxMenu && (
                 <SpecContextMenu
-                  x={specCtxMenu.x} y={specCtxMenu.y} flip={specCtxMenu.flip}
+                  x={specCtxMenu.x} y={specCtxMenu.y}
                   onClose={() => setSpecCtxMenu(null)}
                   colormapName={colormapName} onColormapChange={handleColormapChange}
-                  formantVisible={formantVisible} onToggleTrack={toggleSpecTrack}
                   specComputing={specComputing} onForceRefreshSpec={calcSpecForView}
                   formantComputing={formantComputing} onRegenerateFormants={calcFormantForView}
                 />

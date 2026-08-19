@@ -186,24 +186,19 @@ html, body {
 /* wrap to another row */
 .toolbar {
   min-height: 64px; height: auto; flex-shrink: 0;
-  display: flex; align-items: center; gap: 28px; padding: 10px 28px;
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 10px 14px; padding: 10px 24px;
   background: var(--bg-ui);
   border-bottom: 1px solid var(--border-ui2);
   box-shadow: 0 1px 0 rgba(255,255,255,0.03) inset;
   flex-wrap: wrap;
 }
-.toolbar-group { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-/* Classic 3-part "media player" toolbar layout (2026-08-17, per user request — logo/
-   undo-redo pinned left, transport/zoom truly centered regardless of how wide the left
-   and right groups are, Scores/MFA/Export/More pinned right): left and right take equal
-   share of the remaining space and push their own content to their outer edge, which
-   centers the (unstretched, auto-width) center group between them. Simpler than a CSS
-   grid `1fr auto 1fr` equivalent and keeps `.toolbar`'s existing flex-wrap safety net
-   for narrow windows (see "Toolbar responsiveness" in HANDOFF.md). */
-.toolbar-group--left, .toolbar-group--right { flex: 1 1 0; min-width: 0; }
-.toolbar-group--left  { justify-content: flex-start; }
-.toolbar-group--right { justify-content: flex-end; }
-.toolbar-group--center { flex: 0 0 auto; } /* Undo/Redo, Play/Stop/Time/Speed, Zoom — kept together, centered as one block */
+.toolbar-group { display: flex; align-items: center; gap: 10px; flex-wrap: nowrap; }
+/* Flatten the three structural groups into one responsive flex row. Composite controls
+   that need their own positioning wrapper (logo/status, MFA, Export, More) stay atomic;
+   Undo/Redo, transport, and zoom remain compact functional clusters. */
+.toolbar > .toolbar-group { display: contents; }
+.toolbar-group--right > .toolbar-group { display: contents; }
 
 /* Undo/Redo sit tighter together than the rest of the toolbar's 10px group gap, since
    they're functionally a pair — separated from the rest of the left group by the wider
@@ -259,7 +254,7 @@ html, body {
 .save-indicator--saved   { color: var(--save-saved); background: var(--save-saved-bg); }
 .save-indicator--error   { color: var(--save-error); background: var(--save-error-bg); }
 @keyframes save-fadein { from { opacity: 0; } to { opacity: 1; } }
-.transport { display: flex; align-items: center; gap: 9px; }
+.transport { display: flex; align-items: center; gap: 7px; }
 /*
 .btn {
   padding: 5px 12px; border-radius: 6px; border: 1px solid var(--border-ui);
@@ -325,6 +320,12 @@ html, body {
 @media (max-width: 1100px) {
   .toolbar .btn-label { display: none; }
 }
+@media (max-width: 1350px) {
+  .toolbar { gap: 14px; padding-inline: 18px; }
+  .toolbar-group { gap: 8px; }
+  .time-display { min-width: 132px; padding-inline: 4px; }
+  input[type="range"] { width: 84px; }
+}
 .toolbar .colormap-select {
   padding: 0 8px 0 10px;
   background: rgba(255,255,255,0.03); border-color: var(--border-ui2); color: var(--text-dim);
@@ -350,34 +351,33 @@ html, body {
 .timeline-body {
   flex: 1; min-height: 0;
   display: flex; flex-direction: column; overflow: hidden;
-  background: var(--bg-deep);
+  background: var(--bg);
 }
 
 /* ── Panels (waveform + spectrogram) ── */
 .panels {
-  flex: 0.70; min-height: 60px;
+  flex: 0.60; min-height: 220px;
   display: flex; flex-direction: column;
-  border-bottom: 1px solid var(--border);
+  background: var(--bg-panel);
 }
 .panel {
   flex: 1; min-height: 0; display: flex;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg-deep);
+  background: var(--bg-panel);
 }
-.panel:last-child { border-bottom: none; }
 
 /* ── Shared row divider (panel-divider and tier-divider are identical) ── */
 .panel-divider, .tier-divider {
   height: 4px; flex-shrink: 0; cursor: row-resize;
-  background: #171b22; transition: background 100ms;
+  background: transparent; transition: background 100ms;
 }
 .panel-divider:hover, .panel-divider:active,
-.tier-divider:hover,  .tier-divider:active { background: var(--accent); }
+.tier-divider:hover,  .tier-divider:active { background: rgba(var(--accent-rgb),0.28); }
 
 /* ── Shared gutter (panel-gutter and tier-gutter share base layout) ── */
 .panel-gutter, .tier-gutter {
-  width: 64px; flex-shrink: 0;
+  width: 112px; flex-shrink: 0;
   display: flex; align-items: center; justify-content: center;
+  position: relative;
   background: var(--bg-panel); border-right: 1px solid var(--border);
   font-size: 12px; font-family: Inter, system-ui, sans-serif;
   color: var(--text-dim);
@@ -393,7 +393,26 @@ html, body {
 }
 
 /* ── Waveform y-zoom +/- (panel-gutter modifier, wave panel only) ── */
-.panel-gutter--wave { flex-direction: column; justify-content: space-between; align-items: center; padding: 8px 0; }
+.panel-gutter--wave { align-items: stretch; justify-content: flex-start; }
+.panel-gutter--axis { justify-content: flex-start; }
+.panel-gutter__identity {
+  width: 48px; height: 100%; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: flex-start;
+  padding-left: 16px;
+}
+.panel-gutter__identity--controls {
+  flex-direction: column; align-items: flex-start; justify-content: space-between;
+  padding: 8px 0 8px 16px;
+}
+.axis-labels {
+  position: absolute; inset: 0 8px 0 52px;
+  pointer-events: none;
+  font: 10px/1 var(--mono); color: var(--text-mute);
+}
+.axis-label {
+  position: absolute; top: clamp(10px, var(--axis-position), calc(100% - 10px)); right: 0;
+  transform: translateY(-50%); white-space: nowrap;
+}
 .panel-gutter-btn {
   background: transparent; border: 1px solid transparent; border-radius: 5px;
   color: var(--text-dark); cursor: pointer;
@@ -404,40 +423,60 @@ html, body {
 .panel-body {
   flex: 1; min-width: 0; position: relative; overflow: hidden;
 }
-.panel-tag {
-  position: absolute; top: 10px; left: 12px;
-  font-size: 11px; font-family: var(--mono);
-  color: rgba(133,139,149,0.72); letter-spacing: .08em; pointer-events: none; z-index: 1;
-}
 .panel-body canvas { width: 100%; height: 100%; display: block; }
 
-/* ── Envelope toggle (waveform panel, top-right corner) ── */
-.envelope-toggle {
-  position: absolute; top: 8px; right: 12px; z-index: 1;
-  display: flex; align-items: center; gap: 6px;
-  font-size: 11px; font-family: var(--mono);
-  color: var(--text-dim); letter-spacing: .04em;
-  cursor: pointer; user-select: none;
+/* ── Direct spectrogram track toggles ── */
+.spec-track-toggles {
+  position: absolute; top: 8px; right: 12px; z-index: 2;
+  display: flex; align-items: center; gap: 9px;
+  padding: 5px 8px;
+  border: 1px solid rgba(255,255,255,0.16); border-radius: 6px;
+  background: rgba(8,12,16,0.78);
+  box-shadow: 0 3px 12px rgba(0,0,0,0.22);
+  backdrop-filter: blur(7px);
+  -webkit-backdrop-filter: blur(7px);
 }
+.spec-track-toggle {
+  display: inline-flex; align-items: center; gap: 4px;
+  color: rgba(255,255,255,0.68);
+  font: 10px/1 var(--mono); cursor: pointer; user-select: none;
+}
+.spec-track-check {
+  appearance: none; -webkit-appearance: none;
+  width: 13px; height: 13px; margin: 0; flex-shrink: 0;
+  position: relative; cursor: pointer;
+  border: 1px solid rgba(255,255,255,0.42); border-radius: 3px;
+  background: rgba(0,0,0,0.18);
+}
+.spec-track-check:checked { border-color: var(--track-color); }
+.spec-track-check:checked::after {
+  content: ''; position: absolute; left: 3px; top: 1px;
+  width: 4px; height: 7px;
+  border: 1.5px solid var(--track-color); border-top: 0; border-left: 0;
+  transform: rotate(45deg);
+}
+.spec-track-check:checked + span { color: var(--track-color); }
+.spec-track-check:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
 
 /* ── Ruler ── */
 .ruler {
-  height: 28px; flex-shrink: 0;
-  display: flex; border-bottom: 1px solid var(--border);
+  height: 32px; flex-shrink: 0;
+  display: flex;
   background: var(--bg-panel);
 }
 .ruler-gutter {
-  width: 64px; flex-shrink: 0;
+  width: 112px; flex-shrink: 0;
   background: var(--bg-panel); border-right: 1px solid var(--border);
 }
 .ruler canvas { flex: 1; min-width: 0; display: block; }
 
 /* ── Tiers ── */
-.tiers { flex: 0.30; min-height: 120px; display: flex; flex-direction: column; overflow: hidden; background: var(--bg-deep); }
+/* A small whitespace break separates the signal block from annotation tiers. */
+.tiers { flex: 0.40; min-height: 220px; margin-top: 8px; display: flex; flex-direction: column; overflow: hidden; background: var(--bg-panel); }
 .tier {
-  flex: 1; min-height: 44px; display: flex;
-  border-bottom: 1px solid var(--border); overflow: hidden;
-  background: var(--bg-deep);
+  flex: 1; min-height: 56px; display: flex;
+  overflow: hidden;
+  background: var(--bg-panel);
 }
 .tier canvas { flex: 1; min-width: 0; display: block; }
 
@@ -449,25 +488,23 @@ html, body {
 
 /* ── Minimap ── */
 .minimap {
-  height: 50px; flex-shrink: 0;
+  height: 40px; flex-shrink: 0;
   display: flex; background: var(--bg-deep);
   border-top: 1px solid var(--border);
 }
 .minimap-gutter {
-  width: 64px; flex-shrink: 0;
+  width: 112px; flex-shrink: 0;
   background: var(--bg-panel); border-right: 1px solid var(--border);
 }
 .minimap canvas { flex: 1; min-width: 0; display: block; cursor: pointer; }
 
 /* ── Scrollbar (below spectrogram, drag to navigate) ── */
 .scrollbar-strip {
-  height: 12px; flex-shrink: 0;
-  display: flex; background: var(--bg-deep);
-  border-top: 1px solid var(--border);
-  border-bottom: 1px solid var(--border);
+  height: 6px; flex-shrink: 0;
+  display: flex; background: var(--bg-panel);
 }
 .scrollbar-gutter {
-  width: 64px; flex-shrink: 0;
+  width: 112px; flex-shrink: 0;
   background: var(--bg-panel); border-right: 1px solid var(--border);
 }
 .scrollbar-strip canvas { flex: 1; min-width: 0; display: block; cursor: pointer; }
@@ -518,7 +555,7 @@ html, body {
    track + circular thumb, and shrank the −/+ glyphs to plain icon buttons, for a
    sleeker look matching the rest of the flattened toolbar) ── */
 .zoom-row {
-  display: flex; align-items: center; gap: 8px; margin-left: 2px;
+  display: flex; align-items: center; gap: 5px; margin-left: 2px;
 }
 .toolbar .zoom-step-btn {
   width: 20px; min-width: 20px; padding: 0;
@@ -579,11 +616,10 @@ input[type="range"]:focus::-moz-range-thumb { background: var(--accent); transfo
 
 /* ── Tier visibility checkbox ── */
 .tier-visibility-bar {
-  height: 32px; flex-shrink: 0;
+  height: 30px; flex-shrink: 0;
   display: flex; align-items: center; gap: 10px;
-  padding: 0 18px 0 10px;
+  padding: 0 18px 0 16px;
   background: var(--bg-panel);
-  border-bottom: 1px solid var(--border);
 }
 .tier-visibility-title {
   width: 42px; flex-shrink: 0;
@@ -650,22 +686,6 @@ input[type="range"]:focus::-moz-range-thumb { background: var(--accent); transfo
 .ctx-menu__item { padding: 8px 16px; cursor: pointer; }
 .ctx-menu__item:hover { background: var(--row-active-bg); color: var(--text); }
 .ctx-menu__sep { height: 1px; background: var(--border-surface); margin: 7px 0; }
-
-/* ── Submenu flyouts (spectrogram right-click menu) ── */
-.ctx-menu__item--parent {
-  position: relative; display: flex; align-items: center; justify-content: space-between;
-}
-.ctx-menu__item--parent::after { content: '▸'; font-size: 9px; color: var(--text-mute); margin-left: 8px; }
-.ctx-menu__submenu {
-  display: none; position: absolute; top: -7px; left: calc(100% + 4px);
-  background: var(--bg-surface); border: 1px solid var(--border-surface);
-  border-radius: 8px; padding: 7px 0; min-width: 210px;
-  box-shadow: 0 16px 44px rgba(0,0,0,0.34);
-}
-.ctx-menu__item--parent:hover > .ctx-menu__submenu { display: block; }
-/* Opens leftward instead — used when the menu was opened near the right edge of the
-   viewport, so a rightward flyout wouldn't fit (see SPEC_CTX_MENU_W in App.jsx). */
-.ctx-menu__submenu--flip { left: auto; right: calc(100% + 4px); }
 
 .ctx-menu__label {
   padding: 9px 16px 5px; font-size: 11px; font-weight: 700; color: var(--text-mute);

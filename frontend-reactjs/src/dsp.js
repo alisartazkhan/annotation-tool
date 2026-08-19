@@ -22,11 +22,13 @@ export function viridis(t) {
 
 export function jet(t) {
   t = Math.max(0, Math.min(1, t));
-  return [
-    Math.round(Math.max(0, Math.min(1, 1.5 - Math.abs(4*t - 3))) * 255),
-    Math.round(Math.max(0, Math.min(1, 1.5 - Math.abs(4*t - 2))) * 255),
-    Math.round(Math.max(0, Math.min(1, 1.5 - Math.abs(4*t - 1))) * 255),
+  const rgb = [
+    Math.max(0, Math.min(1, 1.5 - Math.abs(4*t - 3))),
+    Math.max(0, Math.min(1, 1.5 - Math.abs(4*t - 2))),
+    Math.max(0, Math.min(1, 1.5 - Math.abs(4*t - 1))),
   ];
+  const luma = rgb[0] * 0.2126 + rgb[1] * 0.7152 + rgb[2] * 0.0722;
+  return rgb.map(channel => Math.round((luma + (channel - luma) * 0.72) * 0.82 * 255));
 }
 
 export function greys(t) {
