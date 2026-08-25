@@ -889,14 +889,16 @@ As of 2026-07-24, `/api/compute-dsp` is backed by a **persistent `dsp_server.py 
 
 ### Frequency axis
 
-Drawn directly on the spectrogram canvas at the end of `drawSpec` (not a separate canvas). Ticks at 100, 200, 500, 1k, 2k, 4k, 8 kHz with faint horizontal guide lines. Label color is chosen per colormap:
+**Stale as of 2026-08-25 — corrected below.** This section previously described frequency-axis labels as canvas text drawn at the end of `drawSpec` with a per-colormap color/shadow table; that's no longer how it works (no `fillText` call for tick labels exists anywhere in `App.jsx`, and there's no per-colormap label-color logic left). Current behavior: `SPEC_AXIS_TICKS` (module-level, `App.jsx`) computes each tick's mel-warped vertical `position` once; the actual text is rendered as ordinary theme-aware DOM `<span>` elements (`.axis-label`, `color: var(--text-mute)`) inside `.axis-labels`/`.panel-gutter--axis` — the gutter column to the left of the spectrogram canvas, not on the canvas itself. `drawSpec` only draws the faint horizontal guide lines (`rgba(255,255,255,0.035)`) directly on the canvas, at the end of the function, using the same `SPEC_AXIS_TICKS` positions.
 
-| Colormap | Label color | Shadow |
-|---|---|---|
-| jet | black | white |
-| inferno | white | black |
-| viridis | white | dark purple |
-| greys | black | white |
+### Live frequency crosshair (2026-08-25)
+
+Closes the "live frequency readout" half of old Todo #18 (axis *zoom* is still open — see Todos). Moving the mouse over the spectrogram panel shows a dashed horizontal line at cursor height plus a small floating label (e.g. `342 Hz` / `3.42 kHz`) pinned to the left edge — both rendered as absolutely-positioned DOM elements inside `.panel-body`, the same pattern the `.spec-track-toggles` strip already uses on top of the same canvas, rather than drawn into the canvas bitmap. This avoids adding cost to `drawSpec`'s existing redraw path (blit + formant dots + tick guides) since the crosshair doesn't need any of that work re-run on every mousemove tick — it's pure CSS repositioning.
+
+- **State**: `specCrosshair` (`{ y, hz } | null`, plain `useState`, no ref twin needed since nothing outside rendering reads it) — set by `handleSpecMouseMove` (mousemove on `specCanvasRef`), cleared by `handleSpecMouseLeave`.
+- **Hz computation**: `handleSpecMouseMove` inverts the exact same mel mapping `SPEC_AXIS_TICKS`/`drawSpec`'s formant `hzToMelY` use (`melHz = 2595·log10(1+hz/700)`, fixed `SPEC_AXIS_FMAX = 8000`) — so the readout lines up pixel-for-pixel with the fixed tick labels and with any formant dots/pitch line on screen, not an independently-tuned scale.
+- **Formatting**: `fmtCrosshairHz(hz)` — separate from `SPEC_AXIS_TICKS`' own inline label formatting, since the crosshair needs decimal precision for a continuously-moving value while the fixed ticks are already round numbers.
+- Both overlay elements are `pointer-events: none` so they never intercept wheel-zoom, drag-to-select, or the right-click menu on the canvas beneath them.
 
 ---
 
@@ -1512,7 +1514,7 @@ See also `CODE_REVIEW_FINDINGS.md` (repo root) — a separate simplification/eff
 9. Make the Export popover show its real difference. The Full vs Praat-compatible radio rows in `ExportPopover` both list the same tier set (`WRD + PHN + custom`) as their subtitle — the actual difference is score/edited/`original` metadata (see [TextGrid parsing and serialisation](#textgrid-parsing-and-serialisation)), which isn't visible anywhere in the dialog. While in there, rename `doExportTextGrid`'s `includeCustom` param — it actually sets `praatCompat` (`praatCompat = !includeCustom`), not which tiers get included.
 14. Let the ASR pipeline take an optional reference transcript (`.txt`) of the audio's real text, editable by the user beforehand, and use it to correct/constrain the ASR pass so downstream MFA alignment is more accurate than relying on ASR output alone.
 16. **Tier-name matching for MFA is confusing and has no fix path.** Root-caused 2026-08-17: `loadTextGrid` (`App.jsx`) only recognizes a tier as the built-in Words/Phones tier if its literal name (case-insensitive) is exactly `words` / `phones`|`phonemes`|`phone` — anything else becomes a custom tier, and `handleRunMfa` only ever reads `wordsRef.current`, so MFA silently can't see annotations sitting in a custom tier. The built-in WRD/PHN tier divs always render (even empty) with fixed UI labels "WRD"/"PHN", which don't correspond to the literal tier name the app is matching on — renaming a tier to `WRD` in Praat (matching the on-screen label, not the internal key) creates a second, unrelated custom tier also displayed as "WRD", which is exactly the "two WRD tiers, one empty" report. **Workaround for existing files**: rename the tier in Praat to the literal word `words` (not `WRD`) — and `phones` for phonemes — then reload; the app will pick it up as the real Words/Phones tier and MFA will work. **Real fix, not yet implemented**: add an in-app action (e.g. on the custom tier's controls) to designate/promote an existing custom tier as the Word or Phone tier, and/or let `handleRunMfa`/the MFA button ask which tier to source words from instead of hardcoding `wordsRef`.
-18. Add spectrogram frequency-axis zoom, plus a live frequency readout/crosshair that follows the mouse — currently only the fixed tick labels (100Hz/200Hz/.../8kHz) show frequency, with no way to read an exact value under the cursor.
+18. Add spectrogram frequency-axis zoom (stretch/compress the Hz range shown) — the live frequency crosshair/readout half of this item is done, see [Live frequency crosshair](#live-frequency-crosshair-2026-08-25).
 
 ### Bigger design/investigation work
 

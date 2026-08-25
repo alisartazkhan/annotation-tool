@@ -281,6 +281,13 @@ const SPEC_AXIS_TICKS = [100, 200, 500, 1000, 2000, 4000, 8000].map(hz => ({
   position: 100 * (1 - (2595 * Math.log10(1 + hz / 700)) / (2595 * Math.log10(1 + SPEC_AXIS_FMAX / 700))),
 }));
 
+// Continuous (non-tick) frequency formatting for the live crosshair readout —
+// SPEC_AXIS_TICKS' label field is fine for its fixed round values but has no
+// decimal precision, which the crosshair needs since its value moves continuously.
+function fmtCrosshairHz(hz) {
+  return hz >= 1000 ? `${(hz / 1000).toFixed(2)} kHz` : `${Math.round(hz)} Hz`;
+}
+
 // Swatch colors for the ShortcutsPopover's tile-color legend (TILE_COLOR_LEGEND in
 // shortcuts.js). `default` must stay in sync with drawTier's `defaultRgb` literal.
 const TILE_COLOR_SWATCHES = {
@@ -1042,6 +1049,7 @@ export default function App() {
   const [formantComputing, setFormantComputing] = useState(false);
   const [waveCtxMenu, setWaveCtxMenu]   = useState(null); // { x, y } | null — right-click menu on the waveform
   const [specCtxMenu, setSpecCtxMenu]   = useState(null); // { x, y } | null — right-click menu on the spectrogram
+  const [specCrosshair, setSpecCrosshair] = useState(null); // { y, hz } | null — live frequency readout under the mouse
   const [editMode, setEditMode]         = useState(true);
   const [labelEditor, setLabelEditor]   = useState(null); // { id, tierId, tierType, text, x, y, boxW }
   const [showDashboard, setShowDashboard] = useState(false);
@@ -3575,6 +3583,22 @@ export default function App() {
     });
   }, []);
 
+  // Live frequency crosshair — inverts the same mel-scale mapping used for
+  // SPEC_AXIS_TICKS/drawSpec's formant y-positions, so the readout lines up
+  // exactly with the fixed tick labels and any formant dots/pitch line on screen.
+  const handleSpecMouseMove = useCallback((e) => {
+    const canvas = specCanvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const y = e.clientY - rect.top;
+    if (rect.height <= 0 || y < 0 || y > rect.height) { setSpecCrosshair(null); return; }
+    const melMax = 2595 * Math.log10(1 + SPEC_AXIS_FMAX / 700);
+    const mel = melMax * (1 - y / rect.height);
+    const hz = Math.max(0, 700 * (10 ** (mel / 2595) - 1));
+    setSpecCrosshair({ y, hz });
+  }, []);
+  const handleSpecMouseLeave = useCallback(() => setSpecCrosshair(null), []);
+
   const handleAudioFile = (e) => { if (e.target.files[0]) loadAudio(e.target.files[0]); };
   const handleTGFile    = (e) => {
     const f = e.target.files[0]; if (!f) return;
@@ -4261,7 +4285,20 @@ export default function App() {
               </div>
             </div>
             <div className="panel-body">
-              <canvas ref={specCanvasRef} style={{ height: '100%' }} onContextMenu={handleSpecContextMenu} />
+              <canvas
+                ref={specCanvasRef} style={{ height: '100%' }}
+                onContextMenu={handleSpecContextMenu}
+                onMouseMove={handleSpecMouseMove}
+                onMouseLeave={handleSpecMouseLeave}
+              />
+              {specCrosshair && (
+                <>
+                  <div className="spec-crosshair-line" style={{ top: specCrosshair.y }} />
+                  <div className="spec-crosshair-label" style={{ top: specCrosshair.y }}>
+                    {fmtCrosshairHz(specCrosshair.hz)}
+                  </div>
+                </>
+              )}
               <div className="spec-track-toggles" role="group" aria-label="Spectrogram tracks">
                 {SPEC_TRACK_TOGGLES.map(([key, label, title]) => (
                   <label
