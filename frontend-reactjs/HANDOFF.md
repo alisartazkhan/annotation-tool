@@ -346,7 +346,7 @@ Word tiles use a slightly heavier weight (`500`); phoneme tiles use a monospace 
 
 The tier tiles were softened to match the cleaner reference UI without changing any edit/select behavior:
 
-- Default word/phone colors changed to muted sage/lavender constants in `App.jsx` (`DEFAULT_WORD_RGB = [126,157,102]`, `DEFAULT_PHONE_RGB = [150,124,184]`), and the shortcut-popover swatches continue to read from those constants.
+- Default word/phone colors changed to muted sage/lavender constants in `App.jsx` (`DEFAULT_WORD_RGB = [126,157,102]`, `DEFAULT_PHONE_RGB = [150,124,184]`), and the shortcut-popover swatches continue to read from those constants. **Superseded 2026-08-25** — the sage/lavender split was a tier-identity color (word tier vs. phone/custom tier), but an unscored word's sage sat too close in hue to the high-confidence end of the score gradient, reading as "probably fine" rather than "no data." Both now share one `DEFAULT_TILE_RGB = [150,124,184]` (the old lavender) for any tile with no confidence score — words, phones, and custom tiers alike. `DEFAULT_WORD_RGB` was deleted; `TILE_COLOR_SWATCHES.word`/`.phone` merged into a single `.default` key, and the two corresponding `TILE_COLOR_LEGEND` rows merged into one ("No confidence score").
 - `drawTier` now draws tiles with a small rounded-rectangle helper instead of square `fillRect`/`strokeRect` boxes. The radius is intentionally slight (max 5px) so the tiles read cleaner without becoming pill-shaped.
 - Default and score-colored tile fill/stroke alpha was reduced, with selected tiles still using higher alpha and a thicker stroke. This keeps confidence/edited colors meaningful while making ordinary WRD/PHN intervals less heavy.
 - Vertical tile padding scales up to 22px and word/phone text now caps at 20px/18px. Roomier tier rows therefore add whitespace instead of turning labels and tiles into oversized buttons.
@@ -954,7 +954,7 @@ Four independent checkboxes — **F1**, **F2**, **F3**, **Pitch (F0)** — each 
 Two call paths now fetch formant/pitch data, split specifically so a checkbox click never clobbers the other tracks' visibility:
 - **`fetchFormantData()`** — the shared fetch, no visibility side effects. POSTs to `/api/compute-dsp` with `kind: 'formants'` and stores the result in `formantTrackRef`; returns `true`/`false` so callers can bail out on failure.
 - **`calcFormantForView()`** — the menu's "⟳ Regenerate formants & pitch" item. Calls `fetchFormantData()`, then unconditionally sets all four tracks visible (mirrors the old toolbar's auto-enable-on-generate behavior) and redraws.
-- **`toggleSpecTrack(key)`** — a direct F0/F1/F2/F3 checkbox's `onChange`. If `formantTrackRef.current` is still `null` (nothing generated yet for this view), calls `fetchFormantData()` first; either way, then calls `toggleFormant(key)` for **only** that one key. This is why it's a separate path from `calcFormantForView`: reusing that function here would have reset every track to visible on first use, undoing whichever tracks the user had already unchecked.
+- **`toggleSpecTrack(key)`** — a direct F0/F1/F2/F3 checkbox's `onChange`. **Checking a track on always calls `fetchFormantData()` first (changed 2026-08-25, previously only fetched if `formantTrackRef.current` was still `null`)** — `formantTrackRef` can hold data generated for a different view than whatever's on screen now (the user may have panned/zoomed since the last generate/regenerate), and silently showing that stale strip instead of the current view's real formants meant the right-click "Regenerate formants & pitch" menu item was needed just to get correct data after checking a box, which was the actual complaint this fixed. Unchecking a track skips the fetch entirely (no need to fetch data just to hide it) and goes straight to `toggleFormant(key)`. Either way, only the **one** key the user clicked is ever toggled — this is why it's a separate path from `calcFormantForView`: reusing that function here would have reset every track to visible, undoing whichever tracks the user had already unchecked.
 
 ### Legacy worker
 
@@ -1077,7 +1077,7 @@ Word tiles are normally colored by `item.score` via `scoreColor(score, alpha)`. 
 - 0.5 → yellow `rgb(255, 200, 50)`
 - `scoreColor(1)` → light green `rgb(115, 225, 142)` (used by the dashboard legend)
 
-On the tier canvas and minimap, an **exact** `score === 1` is special-cased to `SCORE_ONE_GREEN = rgb(42, 166, 78)` instead of using the lightened end of `scoreColor`. Items without a score fall back to the muted default tile hues (`DEFAULT_WORD_RGB = rgb(126,157,102)`, `DEFAULT_PHONE_RGB = rgb(150,124,184)`). The dashboard legend calls `scoreColor(0)`/`scoreColor(0.5)`/`scoreColor(1)` directly, so its 1.0 endpoint is the light green above rather than `SCORE_ONE_GREEN`.
+On the tier canvas and minimap, an **exact** `score === 1` is special-cased to `SCORE_ONE_GREEN = rgb(42, 166, 78)` instead of using the lightened end of `scoreColor`. Items without a score fall back to `DEFAULT_TILE_RGB = rgb(150,124,184)` (muted lavender) — as of 2026-08-25 this is a single shared constant for any tile with no confidence score (word, phone, or custom), not a word-vs-phone split; see [Visual tile polish](#visual-tile-polish-2026-08-19) for why the earlier sage/lavender split was replaced. The dashboard legend calls `scoreColor(0)`/`scoreColor(0.5)`/`scoreColor(1)` directly, so its 1.0 endpoint is the light green above rather than `SCORE_ONE_GREEN`.
 
 ### Edited word rendering
 
@@ -1097,6 +1097,8 @@ When a word is created or modified, `commitTierItems` sets `score: 2` alongside 
 Note: the tile color and the dashboard exclusion are independent — `drawTier`/minimap use the `edited` flag for canvas color; `ConfidenceDashboard` uses the `edited` flag to filter the `score` value out of histogram and stats.
 
 **Scores** button (icon dropped 2026-08-17, see [Toolbar layout & overflow menu](#toolbar-layout--overflow-menu-2026-08-17-toolbar-cleanup)) toggles `ConfidenceDashboard` — stat grid, 10-bin histogram, color legend, 5 lowest-confidence words, and (below the lowest-confidence list) an **Edited words** section.
+
+**Click-to-seek on the lowest-confidence list (2026-08-25).** Each of the 5 rows is now clickable via a `seekToWord(w)` callback (`App.jsx`, passed down as `ConfidenceDashboard`'s `onSeek` prop) — mirrors a plain tile click in `addTierEditInteraction`'s non-edit-mode path (exclusive select + move playhead to the word's `t0` + `redraw()`), and additionally recenters `viewRef` on the word if it's currently scrolled out of view. Respects the **AUTO-PLAY** checkbox the same way a tile click does (`autoPlayTileRef.current` triggers immediate playback from `t0`). Rows get a hover background (`var(--bg-surface)`) and a `title` tooltip showing the word text + timestamp as the only visual affordance — no other UI change.
 
 ### Edited words list
 
@@ -1123,7 +1125,7 @@ if (isWord) {
     );
     commitItems(updated);
     redraw();
-  });
+  }, item.edited);
 }
 ```
 
@@ -1131,6 +1133,7 @@ if (isWord) {
 - Renders identically to any other edited word — `EDITED_GREEN` fill/stroke (see above), no distinct visual for "validated" vs. "manually edited."
 - Because `score` is forced to `2` and `edited` is `true`, a validated word is excluded from `ConfidenceDashboard`'s stats and histogram like any other edited word.
 - **No keyboard shortcut** and **no double-click trigger** — right-click context menu only, currently.
+- **Disabled once already edited (2026-08-25).** `menuItem`'s new third `disabled` param (`App.jsx`) renders the row with `.ctx-menu__item--disabled` (`index.css`: dimmed text, `cursor: default`, `pointer-events: none`) and skips attaching the `mousedown` handler entirely, rather than just styling it and relying on the handler to no-op. "Validate word" passes `item.edited` as that flag — since the action's only effect is setting `edited: true` (already true for any word that's been manually edited *or* previously validated), re-running it would be a pure no-op; this just makes that visible instead of a dead click. `Rename…`/`Merge with next`/`Delete` are unaffected — they still call `menuItem` with the default `disabled = false`.
 
 ---
 
@@ -1164,7 +1167,7 @@ The edit mode hotkey is hardcoded to `1` in the keydown handler. The check match
 
 `ShortcutsPopover` has three sections — **KEYBOARD** (`SHORTCUTS`), **TILE EDITING (EDIT MODE)** (`TILE_EDITING_HINTS`), and **TILE COLORS** (`TILE_COLOR_LEGEND`, added 2026-08-17: a confidence gradient bar plus swatches for the default word/phone/edited tile colors, mirroring `ConfidenceDashboard`'s own legend — see [Confidence Score Coloring](#confidence-score-coloring)). All three are `CollapsibleSection`s (`App.jsx`), **closed by default** so the popover opens compact; `openSections` (local `useState`, one bool per section) toggles independently per section — not an accordion, any combination can be open at once. `CollapsibleSection` renders as a `React.Fragment`, not a wrapping `<div>` — its header and children must stay direct children of the popover's 2-column CSS grid, since a wrapping element would pull the child rows out of that grid and break column alignment.
 
-`TILE_COLOR_LEGEND`'s row text lives in `shortcuts.js` (per that file's existing convention), but the actual swatch colors live in `App.jsx`'s `TILE_COLOR_SWATCHES`, next to `EDITED_GREEN`/`scoreColor` — the single source of truth for tile colors. `TILE_COLOR_SWATCHES.word`/`.phone` are literal copies of `drawTier`'s `defaultRgb` values and must be kept in sync manually if those ever change.
+`TILE_COLOR_LEGEND`'s row text lives in `shortcuts.js` (per that file's existing convention), but the actual swatch colors live in `App.jsx`'s `TILE_COLOR_SWATCHES`, next to `EDITED_GREEN`/`scoreColor` — the single source of truth for tile colors. `TILE_COLOR_SWATCHES.default` is a literal copy of `drawTier`'s `defaultRgb` value and must be kept in sync manually if that ever changes.
 
 ---
 
@@ -1507,7 +1510,6 @@ See also `CODE_REVIEW_FINDINGS.md` (repo root) — a separate simplification/eff
 ### Scoped features/fixes (moderate effort)
 
 9. Make the Export popover show its real difference. The Full vs Praat-compatible radio rows in `ExportPopover` both list the same tier set (`WRD + PHN + custom`) as their subtitle — the actual difference is score/edited/`original` metadata (see [TextGrid parsing and serialisation](#textgrid-parsing-and-serialisation)), which isn't visible anywhere in the dialog. While in there, rename `doExportTextGrid`'s `includeCustom` param — it actually sets `praatCompat` (`praatCompat = !includeCustom`), not which tiers get included.
-12. Add click-to-seek to the Confidence Dashboard's lowest-confidence word list (see [Confidence Score Coloring](#confidence-score-coloring)) — currently display-only; clicking a word there could jump the playhead/view to it.
 14. Let the ASR pipeline take an optional reference transcript (`.txt`) of the audio's real text, editable by the user beforehand, and use it to correct/constrain the ASR pass so downstream MFA alignment is more accurate than relying on ASR output alone.
 16. **Tier-name matching for MFA is confusing and has no fix path.** Root-caused 2026-08-17: `loadTextGrid` (`App.jsx`) only recognizes a tier as the built-in Words/Phones tier if its literal name (case-insensitive) is exactly `words` / `phones`|`phonemes`|`phone` — anything else becomes a custom tier, and `handleRunMfa` only ever reads `wordsRef.current`, so MFA silently can't see annotations sitting in a custom tier. The built-in WRD/PHN tier divs always render (even empty) with fixed UI labels "WRD"/"PHN", which don't correspond to the literal tier name the app is matching on — renaming a tier to `WRD` in Praat (matching the on-screen label, not the internal key) creates a second, unrelated custom tier also displayed as "WRD", which is exactly the "two WRD tiers, one empty" report. **Workaround for existing files**: rename the tier in Praat to the literal word `words` (not `WRD`) — and `phones` for phonemes — then reload; the app will pick it up as the real Words/Phones tier and MFA will work. **Real fix, not yet implemented**: add an in-app action (e.g. on the custom tier's controls) to designate/promote an existing custom tier as the Word or Phone tier, and/or let `handleRunMfa`/the MFA button ask which tier to source words from instead of hardcoding `wordsRef`.
 18. Add spectrogram frequency-axis zoom, plus a live frequency readout/crosshair that follows the mouse — currently only the fixed tick labels (100Hz/200Hz/.../8kHz) show frequency, with no way to read an exact value under the cursor.

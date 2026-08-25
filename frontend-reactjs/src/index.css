@@ -692,6 +692,7 @@ input[type="range"]:focus::-moz-range-thumb { background: var(--accent); transfo
 }
 .ctx-menu__item { padding: 8px 16px; cursor: pointer; }
 .ctx-menu__item:hover { background: var(--row-active-bg); color: var(--text); }
+.ctx-menu__item--disabled { color: var(--text-dark); opacity: 0.55; cursor: default; pointer-events: none; }
 .ctx-menu__sep { height: 1px; background: var(--border-surface); margin: 7px 0; }
 
 .ctx-menu__label {

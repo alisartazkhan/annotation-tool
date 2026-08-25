@@ -270,8 +270,9 @@ const EDITED_GREEN = [0, 169, 165]; // #00A9A5
 // Words with a perfect (1.0) confidence score get this exact tone instead of the
 // lightened end of the scoreColor() gradient, so they read as clearly "max confidence".
 const SCORE_ONE_GREEN = [42, 166, 78]; // #2AA64E
-const DEFAULT_WORD_RGB = [126, 157, 102];
-const DEFAULT_PHONE_RGB = [150, 124, 184];
+// Shared default hue for any tile with no confidence score — words, phones, and
+// custom tiers all render this same lavender until a word tile earns a score.
+const DEFAULT_TILE_RGB = [150, 124, 184];
 const TIMELINE_GUTTER = 112;
 const SPEC_AXIS_FMAX = 8000;
 const SPEC_AXIS_TICKS = [100, 200, 500, 1000, 2000, 4000, 8000].map(hz => ({
@@ -281,10 +282,9 @@ const SPEC_AXIS_TICKS = [100, 200, 500, 1000, 2000, 4000, 8000].map(hz => ({
 }));
 
 // Swatch colors for the ShortcutsPopover's tile-color legend (TILE_COLOR_LEGEND in
-// shortcuts.js). word/phone must stay in sync with drawTier's `defaultRgb` literals.
+// shortcuts.js). `default` must stay in sync with drawTier's `defaultRgb` literal.
 const TILE_COLOR_SWATCHES = {
-  word: `rgb(${DEFAULT_WORD_RGB.join(',')})`,
-  phone: `rgb(${DEFAULT_PHONE_RGB.join(',')})`,
+  default: `rgb(${DEFAULT_TILE_RGB.join(',')})`,
   edited: `rgb(${EDITED_GREEN.join(',')})`,
 };
 
@@ -871,7 +871,7 @@ function ShortcutsPopover({ onClose }) {
   );
 }
 
-function ConfidenceDashboard({ words }) {
+function ConfidenceDashboard({ words, onSeek }) {
   const scored = words.filter(w => w.score != null && !w.edited).sort((a, b) => a.score - b.score);
   const edited = words.filter(w => w.edited);
   if (scored.length === 0) {
@@ -951,7 +951,18 @@ function ConfidenceDashboard({ words }) {
         LOWEST CONFIDENCE
       </div>
       {low.map(w => (
-        <div key={w.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '3px 0', borderBottom: '1px solid var(--border)' }}>
+        <div
+          key={w.id}
+          onClick={() => onSeek?.(w)}
+          title={`Jump to "${w.text || '<empty>'}" at ${w.t0.toFixed(2)}s`}
+          style={{
+            display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+            padding: '3px 4px', margin: '0 -4px', borderRadius: 4,
+            borderBottom: '1px solid var(--border)', cursor: onSeek ? 'pointer' : 'default',
+          }}
+          onMouseEnter={e => { if (onSeek) e.currentTarget.style.background = 'var(--bg-surface)'; }}
+          onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
+        >
           <span style={{ fontSize: 12, color: 'var(--text-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 120 }}>
             {w.text || '<empty>'}
           </span>
@@ -1555,7 +1566,7 @@ export default function App() {
     const isDark = themeRef.current !== 'light';
     // Default tier chrome (no score / not edited). Selection brightens these same RGBs
     // rather than swapping to a fixed accent color.
-    const defaultRgb  = isWord ? DEFAULT_WORD_RGB : DEFAULT_PHONE_RGB;
+    const defaultRgb  = DEFAULT_TILE_RGB;
     const strokeColor = rgbaFromRgb(defaultRgb, isWord ? 0.58 : 0.52); // hover-edge restore
     const maxFontSize = isWord ? 20 : 18;
     const fontSize    = Math.round(Math.max(11, Math.min(maxFontSize, rowH * 0.34)) * fontScaleRef.current);
@@ -2102,11 +2113,15 @@ export default function App() {
     drawSpec();
   }, [fetchFormantData, drawSpec]);
 
-  // A direct F0/F1/F2/F3 checkbox click — fetches once, the
-  // first time any track is requested for the current view, then only ever toggles the
-  // one track the user clicked (never forces the others on/off).
+  // A direct F0/F1/F2/F3 checkbox click. Checking a track on always re-fetches for
+  // the current view first — formantTrackRef may hold stale data from whatever view
+  // was on screen the last time anything was generated/regenerated, and silently
+  // showing that instead of re-running the right-click "Regenerate formants & pitch"
+  // menu item was the exact friction this replaces. Unchecking just hides that track,
+  // no fetch needed. Never forces any other track's visibility either way.
   const toggleSpecTrack = useCallback(async (key) => {
-    if (!formantTrackRef.current) {
+    const turningOn = !formantVisibleRef.current[key];
+    if (turningOn) {
       const ok = await fetchFormantData();
       if (!ok) return;
     }
@@ -3379,11 +3394,13 @@ export default function App() {
       menu.style.left = e.clientX + 'px';
       menu.style.top = e.clientY + 'px';
 
-      const menuItem = (label, action) => {
+      const menuItem = (label, action, disabled = false) => {
         const el = document.createElement('div');
         el.textContent = label;
-        el.className = 'ctx-menu__item';
-        el.addEventListener('mousedown', (ev) => { ev.preventDefault(); menu.remove(); action(); });
+        el.className = disabled ? 'ctx-menu__item ctx-menu__item--disabled' : 'ctx-menu__item';
+        if (!disabled) {
+          el.addEventListener('mousedown', (ev) => { ev.preventDefault(); menu.remove(); action(); });
+        }
         menu.appendChild(el);
       };
 
@@ -3413,7 +3430,7 @@ export default function App() {
           );
           commitItems(updated);
           redraw();
-        });
+        }, item.edited);
       }
 
       const sep = document.createElement('div');
@@ -3816,6 +3833,30 @@ export default function App() {
       window.addEventListener('mouseup', up);
     },
   });
+
+  // Confidence Dashboard's lowest-confidence list — click a word to jump to it.
+  // Mirrors a plain tile click (see addTierEditInteraction's non-edit-mode path):
+  // exclusive select + move playhead to t0 + redraw, plus recentres the timeline
+  // if the word is currently scrolled out of view.
+  const seekToWord = useCallback((w) => {
+    selectedTilesRef.current.clear();
+    selectedTilesRef.current.set(w.id, { id: w.id, tierId: 'words' });
+    syncSelectionState();
+    selectionRef.current = { t0: w.t0, t1: w.t1 };
+    playheadRef.current = w.t0;
+
+    const { t0, t1 } = viewRef.current;
+    if (w.t0 < t0 || w.t0 > t1) {
+      const span = t1 - t0;
+      const DUR = durationRef.current;
+      const desiredT0 = Math.max(0, Math.min(DUR - span, w.t0 - span / 2));
+      viewRef.current = { t0: desiredT0, t1: desiredT0 + span };
+    }
+
+    updateTimeDisplay();
+    redraw();
+    if (autoPlayTileRef.current) { stopPlay(); startPlay(w.t0); }
+  }, [syncSelectionState, updateTimeDisplay, redraw, stopPlay, startPlay]);
 
   // ── JSX ───────────────────────────────────────────────────────────────
   return (
@@ -4432,7 +4473,7 @@ export default function App() {
       </div>
 
       {/* Confidence dashboard side panel */}
-      {showDashboard && <ConfidenceDashboard words={words} />}
+      {showDashboard && <ConfidenceDashboard words={words} onSeek={seekToWord} />}
 
       </div>{/* flex wrapper */}
 
