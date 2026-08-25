@@ -105,14 +105,19 @@ def _edit_distance(a: str, b: str) -> int:
     return prev[-1]
 
 
+@lru_cache(maxsize=4096)
 def _closest_dict_word(word: str) -> tuple[str, int] | None:
     vocab = _load_dict_words()
     if not vocab:
         return None
     n = len(word)
     candidates = [w for w in vocab if abs(len(w) - n) <= max(3, n // 2)] or list(vocab)
-    best = min(candidates, key=lambda w: _edit_distance(word, w))
-    return best, _edit_distance(word, best)
+    best, best_dist = None, None
+    for w in candidates:
+        d = _edit_distance(word, w)
+        if best_dist is None or d < best_dist:
+            best, best_dist = w, d
+    return best, best_dist
 
 
 # ── Persistent aligner (loaded once at startup) ───────────────────────────────

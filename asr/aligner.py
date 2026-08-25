@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import string
 import tempfile
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -157,14 +158,19 @@ def _edit_distance(a: str, b: str) -> int:
     return prev[-1]
 
 
+@lru_cache(maxsize=4096)
 def _closest_dict_word(word: str, dictionary: str) -> tuple[str, int] | None:
     vocab = _load_dict_words(dictionary)
     if not vocab:
         return None
     n = len(word)
     candidates = [w for w in vocab if abs(len(w) - n) <= max(3, n // 2)] or list(vocab)
-    best = min(candidates, key=lambda w: _edit_distance(word, w))
-    return best, _edit_distance(word, best)
+    best, best_dist = None, None
+    for w in candidates:
+        d = _edit_distance(word, w)
+        if best_dist is None or d < best_dist:
+            best, best_dist = w, d
+    return best, best_dist
 
 
 def _substitute_oov(words: list[str], dictionary: str) -> tuple[list[str], dict[str, str]]:
@@ -235,19 +241,22 @@ def _align_segment(
     aligner,
     wav_path: Path,
     transcript: str,
-    t_offset: float,
-    duration: float,
+    seg_t0: float,
+    seg_t1: float,
 ) -> tuple[list[dict], list[dict]]:
     """
-    Align one segment.  Returns (phones_tier, words_tier) in the same format
-    as mfa_server.py's /align endpoint.
+    Align one segment given as a native (begin, end) offset into a shared WAV
+    file — Kalpy's Segment class supports this directly (standard Kaldi segment
+    semantics), so there's no need to write/reread a fresh temp file per segment.
+    Returns (phones_tier, words_tier) in the same format as mfa_server.py's
+    /align endpoint.
     """
     from kalpy.utterance import Utterance, Segment
 
-    segment = Segment(str(wav_path), 0.0, duration, 0)
+    segment = Segment(str(wav_path), seg_t0, seg_t1, 0)
     utt = Utterance(segment, transcript, None, None)
     ctm = aligner.align_utterance(utt)
-    ctm.update_utterance_boundaries(t_offset, t_offset + duration)
+    ctm.update_utterance_boundaries(seg_t0, seg_t1)
 
     phones_tier: list[dict] = []
     words_tier: list[dict] = []
@@ -311,13 +320,24 @@ def run_mfa(
             print(f'[MFA] Could not read audio {audio_path}: {e}')
             return result
 
+        # Write the resampled audio to a single shared 16kHz WAV once. Kalpy's
+        # Segment class natively supports (begin, end) offsets into a larger file
+        # (standard Kaldi segment semantics), so each segment below reads from
+        # this one file instead of writing/rereading its own temp WAV.
+        full_wav_path = tmp / 'full_16k.wav'
+        try:
+            _write_wav_16k(full_wav_path, full_samples)
+        except Exception as e:
+            print(f'[MFA] Could not write shared WAV for {audio_path}: {e}')
+            return result
+
         for seg_i, seg in enumerate(segments):
             text_raw = _segment_text(seg)
             if not text_raw:
                 continue
 
             t0  = float(seg.get('start') or 0)
-            t1  = float(seg.get('end')   or 0)
+            t1  = min(float(seg.get('end') or 0), full_duration)
             dur = t1 - t0
             if dur < 0.05:
                 continue
@@ -328,27 +348,11 @@ def run_mfa(
             words_subbed, oov_subs = _substitute_oov(words_raw, dictionary)
             transcript = ' '.join(words_subbed)
 
-            # Slice the resampled audio for this segment
-            s0 = int(t0 * TARGET_SR)
-            s1 = int(t1 * TARGET_SR)
-            seg_samples = full_samples[s0:s1]
-
-            if len(seg_samples) < int(0.05 * TARGET_SR):
-                print(f'[MFA] Segment {seg_i} too short after slice; skipping.')
-                continue
-
-            wav_path = tmp / f'seg_{seg_i:04d}.wav'
-            try:
-                _write_wav_16k(wav_path, seg_samples)
-            except Exception as e:
-                print(f'[MFA] Could not write WAV for segment {seg_i}: {e}')
-                continue
-
             import time
             t_start = time.time()
             try:
                 phones_tier, _words_tier = _align_segment(
-                    aligner, wav_path, transcript, t0, len(seg_samples) / TARGET_SR,
+                    aligner, full_wav_path, transcript, t0, t1,
                 )
             except Exception as e:
                 print(f'[MFA] Alignment failed for segment {seg_i} ("{transcript}"): {e}')

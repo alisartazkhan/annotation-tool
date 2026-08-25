@@ -2072,6 +2072,7 @@ export default function App() {
           colormap: colormapNameRef.current,
           kind: 'formants', // server skips spectrogram computation entirely — see below
         }),
+        signal: AbortSignal.timeout(SPEC_FETCH_TIMEOUT_MS),
       });
       const data = await res.json();
       if (data.error) throw new Error(data.error);
@@ -3125,6 +3126,15 @@ export default function App() {
           ? (neighbour ? neighbour.t1 - 0.01 : DUR)
           : item.t1 - 0.01;
 
+        // Snap boundaries are fixed for the whole gesture — only the dragged tile
+        // (and its already-excluded neighbour) move — so compute once instead of
+        // rescanning every tier's items on every mousemove tick.
+        const crossBounds = getCrossTierBoundaries(tierId);
+        const sameBounds = itemsRef.current
+          .filter(it => it.id !== item.id && (neighbour ? it.id !== neighbour.id : true))
+          .flatMap(it => [it.t0, it.t1]);
+        const allBounds = [...crossBounds, ...sameBounds];
+
         let didPushUndo = false;
         const onMove = (ev) => {
           if (!didPushUndo) { pushUndo(); didPushUndo = true; }
@@ -3136,11 +3146,6 @@ export default function App() {
           const SNAP_PX = 10;
           const snapThreshT = (SNAP_PX / rect.width) * (viewRef.current.t1 - viewRef.current.t0);
           if (!ev.altKey) {
-            const crossBounds = getCrossTierBoundaries(tierId);
-            const sameBounds = itemsRef.current
-              .filter(it => it.id !== item.id && (neighbour ? it.id !== neighbour.id : true))
-              .flatMap(it => [it.t0, it.t1]);
-            const allBounds = [...crossBounds, ...sameBounds];
             let best = null, bestD = snapThreshT;
             for (const bt of allBounds) {
               const d = Math.abs(newT - bt);
@@ -3201,6 +3206,28 @@ export default function App() {
           const groupOrigT0 = Math.min(...allOrig.map(o => o.origT0));
           const groupOrigT1 = Math.max(...allOrig.map(o => o.origT1));
 
+          // Snap boundaries and per-tier item refs are fixed for the whole gesture —
+          // only the selected tiles move — so resolve/compute both once instead of
+          // rescanning every tier and re-deriving each tier's ref on every mousemove
+          // tick. Only snap to tiers that have NO selected tiles; within dragged
+          // tiers snap to unselected neighbours.
+          const draggedTierIds = new Set(origsByTier.keys());
+          const tiers = getAllTiers();
+          const crossBounds = tiers
+            .filter(t => !draggedTierIds.has(t.id))
+            .flatMap(t => t.items.flatMap(it => [it.t0, it.t1]));
+          const sameBounds = tiers
+            .filter(t => draggedTierIds.has(t.id))
+            .flatMap(t => t.items.filter(it => !selectedIds.has(it.id)).flatMap(it => [it.t0, it.t1]));
+          const allBounds = [...crossBounds, ...sameBounds];
+          const tierRefs = new Map();
+          for (const dragTierId of draggedTierIds) {
+            tierRefs.set(dragTierId,
+              dragTierId === 'words'  ? wordsRef
+              : dragTierId === 'phones' ? phonesRef
+              : { current: customTiersRef.current.find(t => t.id === dragTierId)?.items ?? [] });
+          }
+
           const onMove = (ev) => {
             if (!didPushUndo) { pushUndo(); didPushUndo = true; }
             didDrag = true;
@@ -3212,16 +3239,6 @@ export default function App() {
             if (!ev.altKey) {
               const SNAP_PX = 10;
               const snapThreshT = (SNAP_PX / rect.width) * (viewRef.current.t1 - viewRef.current.t0);
-              // Only snap to tiers that have NO selected tiles; within dragged tiers snap to unselected neighbours
-              const draggedTierIds = new Set(origsByTier.keys());
-              const tiers = getAllTiers();
-              const crossBounds = tiers
-                .filter(t => !draggedTierIds.has(t.id))
-                .flatMap(t => t.items.flatMap(it => [it.t0, it.t1]));
-              const sameBounds = tiers
-                .filter(t => draggedTierIds.has(t.id))
-                .flatMap(t => t.items.filter(it => !selectedIds.has(it.id)).flatMap(it => [it.t0, it.t1]));
-              const allBounds = [...crossBounds, ...sameBounds];
               const newGroupT0 = groupOrigT0 + dt;
               const newGroupT1 = groupOrigT1 + dt;
               let best = null, bestD = snapThreshT, bestEdge = 't0';
@@ -3241,9 +3258,7 @@ export default function App() {
             snapGuideRef.current = { ts: [groupOrigT0 + dt, groupOrigT1 + dt] };
 
             for (const [dragTierId, origList] of origsByTier) {
-              const tItemsRef = dragTierId === 'words'  ? wordsRef
-                              : dragTierId === 'phones' ? phonesRef
-                              : { current: customTiersRef.current.find(t => t.id === dragTierId)?.items ?? [] };
+              const tItemsRef = tierRefs.get(dragTierId);
               const idSet = new Set(origList.map(o => o.id));
               const origMap = new Map(origList.map(o => [o.id, o]));
               const updated = tItemsRef.current.map(it => {
@@ -3286,6 +3301,15 @@ export default function App() {
           const origT0 = item.t0, origT1 = item.t1;
           const width = origT1 - origT0;
 
+          // Snap boundaries are fixed for the whole gesture — only this tile moves —
+          // so compute once instead of rescanning every tier's items on every
+          // mousemove tick.
+          const crossBounds = getCrossTierBoundaries(tierId);
+          const sameBounds = itemsRef.current
+            .filter(it => it.id !== item.id)
+            .flatMap(it => [it.t0, it.t1]);
+          const allBounds = [...crossBounds, ...sameBounds];
+
           const onMove = (ev) => {
             if (!didPushUndo) { pushUndo(); didPushUndo = true; }
             didDrag = true;
@@ -3297,11 +3321,6 @@ export default function App() {
             if (!ev.altKey) {
               const SNAP_PX = 10;
               const snapThreshT = (SNAP_PX / rect.width) * (viewRef.current.t1 - viewRef.current.t0);
-              const crossBounds = getCrossTierBoundaries(tierId);
-              const sameBounds = itemsRef.current
-                .filter(it => it.id !== item.id)
-                .flatMap(it => [it.t0, it.t1]);
-              const allBounds = [...crossBounds, ...sameBounds];
               const newT1 = newT0 + width;
               let best = null, bestD = snapThreshT, bestEdge = 't0';
               for (const bt of allBounds) {
