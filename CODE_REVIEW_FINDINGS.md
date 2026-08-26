@@ -180,10 +180,6 @@ extracted — `frontend-reactjs/src/` still has no new helper module beyond `App
   `[...words].sort((a,b)=>a.t0-b.t0).map(w=>w.text.trim()).filter(Boolean).join(' ')`.
   Extract `wordsToTranscript(words)`.
 
-- **`ExportPopover` computes the derived filename twice** —
-  `(name.trim() || defaultName).replace(/\.TextGrid$/i, '')` at
-  `frontend-reactjs/src/App.jsx:434` and again at `444`. Compute once, reuse.
-
 - **Viewport-clamping logic duplicated with slightly different implementations**
   between `IpaTooltip` (`frontend-reactjs/src/App.jsx:165-181`, measures via
   `offsetWidth`/`offsetHeight`, 6px margin, sets React state) and

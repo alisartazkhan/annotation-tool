@@ -117,6 +117,7 @@ code/
 ├── mfa_server.py             — Flask server for in-browser MFA re-alignment
 ├── asr/                      — ASR + initial alignment pipeline
 │   ├── transcribe.py         — entry point: audio → TextGrid
+│   ├── reference_align.py    — optional word-level correction against a known reference transcript
 │   ├── aligner.py            — MFA forced alignment
 │   ├── textgrid_writer.py    — writes the output TextGrid
 │   ├── models/

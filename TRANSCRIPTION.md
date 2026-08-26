@@ -59,3 +59,16 @@ MFA phoneme alignment defaults to English (`english_us_arpa`) though, so alignin
 See [asr/README.md](asr/README.md#all-flags) for the full flag reference. Phoneme labels for non-English models are shown as MFA's own phone symbols as-is — the ARPAbet→IPA lookup only covers English ARPAbet phones and passes anything else through unchanged.
 
 For non-English **in-browser** MFA re-alignment (the MFA button while annotating), see [Advanced features → In-browser MFA re-alignment](ADVANCED.md#in-browser-mfa-re-alignment).
+
+---
+
+### Using a reference transcript
+
+If you already know the exact text of the audio (a script, or a transcript you've hand-corrected), give the pipeline that text and it'll correct ASR's word-level output against it before MFA alignment runs — useful since ASR mishearings otherwise propagate straight into the final TextGrid.
+
+Via the convenience scripts, as an optional third argument:
+```bash
+bash asr/run_whisper.sh /path/to/audio.wav output_name /path/to/reference.txt
+```
+
+The reference transcript only needs to be plain text — the correction step matches words regardless of case or punctuation, and keeps the reference's own wording wherever it can find a match in the ASR output. Words ASR heard that aren't in the reference (e.g. filler words) are dropped; words in the reference that ASR never detected at all are skipped, since there's no audio timing to place them from. See [asr/README.md → Using a reference transcript](asr/README.md#using-a-reference-transcript) for how the correction step works and the manual two-step form of this command.

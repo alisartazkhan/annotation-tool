@@ -437,10 +437,10 @@ function serializeTextGrid(duration, wordItems, phoneItems, customTiers = [], pr
 function ExportPopover({ defaultName, customTiers, onExport, onClose }) {
   const [name, setName] = useState(defaultName);
   const [mode, setMode] = useState('full'); // 'praat' | 'full'
+  const base = (name.trim() || defaultName).replace(/\.TextGrid$/i, '');
   const doExport = () => {
-    const base = (name.trim() || defaultName).replace(/\.TextGrid$/i, '');
-    if (mode === 'praat') onExport(`${base}_praat.TextGrid`, false);
-    else                  onExport(`${base}.TextGrid`,       true);
+    if (mode === 'praat') onExport(`${base}_praat.TextGrid`, true);
+    else                  onExport(`${base}.TextGrid`,       false);
   };
   const rowStyle = (active) => ({
     display: 'flex', alignItems: 'flex-start', gap: 8, padding: '7px 10px',
@@ -448,7 +448,7 @@ function ExportPopover({ defaultName, customTiers, onExport, onClose }) {
     background: active ? 'var(--row-active-bg)' : 'transparent',
     border: `1px solid ${active ? 'var(--border-surface)' : 'transparent'}`,
   });
-  const base = (name.trim() || defaultName).replace(/\.TextGrid$/i, '');
+  const tierList = `WRD + PHN${customTiers.length > 0 ? ` + ${customTiers.map(t => t.name).join(', ')}` : ''}`;
   return (
     <div className="popover-panel" style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: 280 }}>
       <div style={{ fontSize: 11, color: 'var(--card-label)', fontFamily: 'Inter,sans-serif' }}>Save as</div>
@@ -474,7 +474,7 @@ function ExportPopover({ defaultName, customTiers, onExport, onClose }) {
               Praat compatible
             </div>
             <div style={{ fontSize: 10, color: 'var(--text-mute)', fontFamily: 'Inter,sans-serif', marginTop: 1 }}>
-              WRD + PHN{customTiers.length > 0 ? ` + ${customTiers.map(t => t.name).join(', ')}` : ''} · <em>{base}_praat.TextGrid</em>
+              {tierList} — scores/edited metadata omitted so Praat opens without warnings · <em>{base}_praat.TextGrid</em>
             </div>
           </div>
         </label>
@@ -486,7 +486,7 @@ function ExportPopover({ defaultName, customTiers, onExport, onClose }) {
               Full export
             </div>
             <div style={{ fontSize: 10, color: 'var(--text-mute)', fontFamily: 'Inter,sans-serif', marginTop: 1 }}>
-              WRD + PHN{customTiers.length > 0 ? ` + ${customTiers.map(t => t.name).join(', ')}` : ''} · <em>{base}.TextGrid</em>
+              {tierList} — includes confidence scores + edited/validated metadata · <em>{base}.TextGrid</em>
             </div>
           </div>
         </label>
@@ -2381,8 +2381,7 @@ export default function App() {
   }, [redraw]);
 
   // ── Export TextGrid ───────────────────────────────────────────────────
-  const doExportTextGrid = useCallback((filename, includeCustom) => {
-    const praatCompat = !includeCustom;
+  const doExportTextGrid = useCallback((filename, praatCompat) => {
     const text = serializeTextGrid(durationRef.current, wordsRef.current, phonesRef.current, customTiersRef.current, praatCompat);
     const blob = new Blob([text], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);

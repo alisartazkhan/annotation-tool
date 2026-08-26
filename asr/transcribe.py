@@ -33,6 +33,11 @@ Optional flags
   --no-mfa          Skip MFA; writes a words-only TextGrid (requires --output).
   --from-json PATH  Skip ASR; load a previously saved JSON and run MFA + TextGrid.
   --json PATH       Save the raw ASR result as JSON at this path.
+  --reference-txt   Optional reference transcript (.txt) of the audio's real text;
+                    corrects ASR's word-level output against it before MFA
+                    alignment (see asr/reference_align.py). Apply on step 2 (or a
+                    one-shot run) — after ASR has produced word timestamps, before
+                    MFA aligns the corrected transcript.
   --dictionary      MFA dictionary name or path   (default: english_us_arpa)
   --acoustic-model  MFA acoustic model name/path  (default: english_us_arpa)
   --checkpoint      Override model checkpoint (Whisper only)
@@ -101,6 +106,10 @@ def main() -> None:
                     help="MFA acoustic model name or path (default: english_us_arpa).")
     ap.add_argument("--json", type=Path, default=None, metavar="PATH",
                     help="Save raw ASR result as JSON at this path.")
+    ap.add_argument("--reference-txt", type=Path, default=None, metavar="PATH",
+                    help="Optional reference transcript (.txt) of the audio's real "
+                         "text; corrects ASR's word-level output against it before "
+                         "MFA alignment.")
     ap.add_argument("--checkpoint", default=None,
                     help="Override the default model checkpoint (Whisper only).")
     args = ap.parse_args()
@@ -117,6 +126,12 @@ def main() -> None:
     audio = args.audio.expanduser().resolve()
     if not audio.is_file():
         ap.error(f"Audio file not found: {audio}")
+
+    reference_path = None
+    if args.reference_txt:
+        reference_path = args.reference_txt.expanduser().resolve()
+        if not reference_path.is_file():
+            ap.error(f"Reference transcript not found: {reference_path}")
 
     out_path = args.output.expanduser().resolve() if args.output else None
 
@@ -145,6 +160,20 @@ def main() -> None:
         n_words = sum(len(seg.get("words", [])) for seg in result.get("segments", []))
         n_segs  = len(result.get("segments", []))
         print(f"[glistener] ASR done: {n_segs} segment(s), {n_words} word(s).")
+
+    # ------------------------------------------------------------------ #
+    #  Stage 1.5 — Reference transcript correction (optional)             #
+    # ------------------------------------------------------------------ #
+    if reference_path:
+        print(f"[glistener] Correcting ASR output against reference transcript: {reference_path}")
+        try:
+            from glistener.reference_align import correct_with_reference
+        except ImportError:
+            from reference_align import correct_with_reference
+        reference_text = reference_path.read_text(encoding="utf-8")
+        result["segments"] = correct_with_reference(result["segments"], reference_text)
+        n_words = sum(len(seg.get("words", [])) for seg in result.get("segments", []))
+        print(f"[glistener] Reference correction done: {n_words} word(s) remain.")
 
     # ------------------------------------------------------------------ #
     #  Stage 2 — MFA phoneme alignment                                     #
