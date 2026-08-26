@@ -128,11 +128,20 @@ code/
 │   ├── run_whisper.sh        — convenience script for WhisperX
 │   └── run_parakeet.sh       — convenience script for Parakeet
 └── frontend-reactjs/         — annotation tool (React + Vite)
-    ├── dsp_server.py         — Python DSP: linear-frequency STFT spectrogram, mel-warped display axis (librosa), run as a persistent worker + formants (parselmouth/Praat)
-    ├── vite.config.js        — Vite config + dev-server middleware (/api/compute-dsp, /api/save-textgrid)
-    ├── public/               — place your .wav and .TextGrid here
+    ├── dsp_server.py         — Python DSP: linear-frequency STFT spectrogram, mel-warped display axis (librosa), run as a persistent worker + formants & pitch (parselmouth/Praat)
+    ├── vite.config.js        — Vite config + dev-server middleware (/api/public-files, /api/compute-dsp, /api/save-textgrid)
+    ├── public/               — place your .wav and .TextGrid here (also ipa_keys.json, the virtual IPA keyboard's key set)
     └── src/
-        └── App.jsx           — main application
+        ├── App.jsx           — main application: state, canvas drawing, interaction
+        ├── parseTextGrid.js  — Praat TextGrid parser + serializer
+        ├── dsp.js            — DSP helpers used on the main thread (mel spectrogram, LPC formants, colormaps)
+        ├── specWorker.js     — Web Worker: base mel spectrogram computed once on load
+        ├── mfaWorker.js      — Web Worker: encodes audio + talks to mfa_server.py for in-browser re-alignment
+        ├── canvasUtils.js    — canvas HiDPI setup + time formatting
+        ├── shortcuts.js      — content for the in-app keyboard-shortcuts / tile-colors popover
+        └── index.css         — all styles
 ```
+
+See [frontend-reactjs/HANDOFF.md](frontend-reactjs/HANDOFF.md) for the full internals — architecture, data model, and a running history of feature/bugfix decisions.
 
 

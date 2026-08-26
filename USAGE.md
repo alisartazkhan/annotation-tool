@@ -60,8 +60,8 @@ You can also load files at any time without restarting:
 
 The annotation area shows stacked tiers below the waveform and spectrogram:
 
-- **WRD** — word-level annotations (muted sage-green tiles by default). Tiles are colored by confidence score if present: red (low) → yellow → green (high).
-- **PHN** — phoneme-level annotations (muted lavender tiles by default). Includes an IPA virtual keyboard when renaming.
+- **WRD** — word-level annotations (muted lavender tiles when no confidence score is present; scored words are colored red (low) → yellow → green (high) instead).
+- **PHN** — phoneme-level annotations (muted lavender tiles — phonemes never carry a confidence score). Includes an IPA virtual keyboard when renaming.
 - **Custom tiers** — any additional tiers loaded from the TextGrid, or created with **+ Add tier** in the **More ⋮** toolbar menu.
 
 Use the **SHOW** checkbox bar at the top of the tier area to hide/show individual tiers. Tiers can be resized by dragging the dividers between them. The **AUTO-PLAY** checkbox (right side of the SHOW bar) makes clicking any tile immediately play its audio without needing to press Play.
@@ -70,7 +70,7 @@ Use the **SHOW** checkbox bar at the top of the tier area to hide/show individua
 
 Words you create or manually change (by editing, moving, or resizing a tile, or via **Validate word** in the right-click menu) are marked as **edited** and highlighted in green on the tile, separate from the confidence-score color scale.
 
-Click **Scores** in the toolbar to open the confidence dashboard: stats (mean/median/min/max), a 10-bin histogram, a color legend, and the 5 lowest-confidence words. Below the lowest-confidence list, an **Edited words** section lists every edited word, showing what it was before and what it was changed to (e.g. ~~teh~~ → the).
+Click **Scores** in the toolbar to open the confidence dashboard: stats (mean/median/min/max), a 10-bin histogram, a color legend, and the 5 lowest-confidence words. Click any word in that list to jump the playhead and view to it. Below the lowest-confidence list, an **Edited words** section lists every edited word, showing what it was before and what it was changed to (e.g. ~~teh~~ → the).
 
 Edited status, and the before/after text, are saved into the `.TextGrid` file along with everything else — so the next time the file is loaded, the Edited words list and the green tile highlighting reappear exactly as they were.
 
@@ -86,7 +86,7 @@ There's no persistent hint bar while unlocked — click the **GSA** logo in the 
 - **Drag a tile body** — drag the centre of a tile to shift it in time; snaps to nearby boundaries in other tiers
 - **Double-click a tile** — open the inline label editor; phoneme tiles show an IPA virtual keyboard
 - **Double-click empty space** — create a new annotation tile at that position
-- **Right-click a tile** — context menu: Rename / Merge with next / Delete (word tiles also get **Validate word**, which marks the word as manually confirmed — see [Confidence scores & edited words](#confidence-scores--edited-words))
+- **Right-click a tile** — context menu: Rename / Merge with next / Delete (word tiles also get **Validate word**, which marks the word as manually confirmed — see [Confidence scores & edited words](#confidence-scores--edited-words)). **Validate word** is greyed out once the word is already edited or validated, since running it again would have no effect.
 - **`⌫` / Delete key** — delete the selected tile(s)
 
 **Multi-tile operations:**
@@ -132,8 +132,8 @@ Click **Export** to download the annotations as a file. Two format options:
 | `Ctrl/Cmd+C` | Copy selected tile(s), including a group across tiers (when unlocked, requires a selection) |
 | `Ctrl/Cmd+V` | Paste copied tile(s) as new tile(s) anchored at the playhead (when unlocked) |
 | `⌫` / `Delete` | Delete selected tile(s) (when unlocked) |
-| `Shift+click` | Range-select in the current tier (keeps other tiers); does not set the play region (when unlocked) |
-| `Ctrl/Cmd+click` (or drag) | Toggle tiles into/out of a multi-selection across tiers — does not replace the selection or set the play region; drag adds tiles in the starting tier (when unlocked) |
+| `Shift+click` | When unlocked: range-select in the current tier (keeps other tiers), without setting the play region. When locked: same as a plain click. |
+| `Ctrl/Cmd+click` (or drag) | When unlocked: toggle tiles into/out of a multi-selection across tiers without replacing the selection or setting the play region; drag adds tiles in the starting tier. When locked: same as a plain click. |
 | `←` / `→` | Pan view by 20% |
 | `↑` / `↓` | Zoom the timeline viewing window in / out |
 | `+` / `-` | Zoom waveform amplitude, or tile text size if a tier was last clicked |
