@@ -255,8 +255,11 @@ def _align_segment(
 
     segment = Segment(str(wav_path), seg_t0, seg_t1, 0)
     utt = Utterance(segment, transcript, None, None)
+    # align_utterance() already shifts every phone from segment-local to absolute
+    # time internally (via ctm.update_utterance_boundaries(utterance.segment.begin,
+    # utterance.segment.end), using this same seg_t0/seg_t1) — an extra explicit
+    # call here would double-apply that shift.
     ctm = aligner.align_utterance(utt)
-    ctm.update_utterance_boundaries(seg_t0, seg_t1)
 
     phones_tier: list[dict] = []
     words_tier: list[dict] = []

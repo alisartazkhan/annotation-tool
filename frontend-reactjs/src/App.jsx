@@ -380,10 +380,28 @@ function withIds(items) {
   return items.map(it => ({ ...it, id: it.id ?? nextId(), row: 0 }));
 }
 
-function serializeTextGrid(duration, wordItems, phoneItems, customTiers = [], praatCompat = false) {
+// Custom tier labels are normally truncated+uppercased for the SHOW bar and the
+// tier's own gutter (e.g. "syllables" -> "SYLL"). But now that a custom tier can be
+// promoted into the Words/Phones role (see promoteTierToRole/TierSourceMenu), a tier
+// literally named "wrd" or "phn" is a normal thing to encounter — and that truncation
+// makes it visually identical to the built-in "WRD"/"PHN" labels. Fall back to the
+// tier's real name in that case, which is enough whenever the casing differs (e.g.
+// "wrd" reads as clearly distinct from "WRD"). If the real name is an exact-case
+// match too — a tier literally named "WRD"/"PHN" — no truncation or casing trick can
+// make it visually distinct, so mark it explicitly instead.
+function customTierLabel(name) {
+  const truncated = name.toUpperCase().slice(0, 4);
+  if (truncated !== 'WRD' && truncated !== 'PHN') return truncated;
+  return (name === 'WRD' || name === 'PHN') ? `${name} (tier)` : name;
+}
+
+function serializeTextGrid(
+  duration, wordItems, phoneItems, customTiers = [], praatCompat = false,
+  wordsTierName = 'words', phonesTierName = 'phones',
+) {
   const tierData = [
-    { name: 'words', items: wordItems },
-    { name: 'phones', items: phoneItems },
+    { name: wordsTierName, items: wordItems },
+    { name: phonesTierName, items: phoneItems },
     ...customTiers.map(t => ({ name: t.name, items: t.items })),
   ];
 
@@ -689,6 +707,31 @@ function SaveConfirmModal({ filename, onConfirm, onCancel }) {
   );
 }
 
+// Confirms before loading a wav (via "Load Wav" or drag-and-drop) overwrites an
+// existing same-named file in public/ — mirrors SaveConfirmModal's shell, but
+// deliberately has no "Don't ask me again" option: overwriting an audio file is a
+// less routine, more consequential action than the TextGrid autosave case, so this
+// always asks (explicit user decision, not an oversight).
+function WavOverwriteModal({ filename, onConfirm, onCancel }) {
+  return (
+    <div className="modal-backdrop" onClick={(e) => { if (e.target === e.currentTarget) onCancel(); }}>
+      <div className="modal-card" style={{ padding: '20px 24px', minWidth: 340, maxWidth: 440, fontFamily: 'Inter,system-ui,sans-serif' }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)', marginBottom: 6 }}>
+          Overwrite existing audio file?
+        </div>
+        <div style={{ fontSize: 11, color: 'var(--text-mute)', marginBottom: 16, lineHeight: 1.5 }}>
+          A file named <code style={{ color: 'var(--accent-soft)' }}>{filename}</code> already exists in{' '}
+          <code style={{ color: 'var(--accent-soft)' }}>public/</code>. Loading this file will replace it.
+        </div>
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+          <button className="btn" onClick={onCancel}>Cancel</button>
+          <button className="btn btn-export" onClick={onConfirm}>Overwrite & Load</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // Renders as a Fragment (not a wrapping element) so the header row and its child rows
 // stay direct children of ShortcutsPopover's 2-column CSS grid — a wrapping <div> would
 // pull `children` out of that grid and break the column alignment.
@@ -775,7 +818,7 @@ function SpecContextMenu({
         {specComputing ? '⟳ Refreshing…' : '↻ Force Refresh'}
       </div>
       <div className="ctx-menu__item" onClick={() => { onClose(); onRegenerateFormants(); }}>
-        {formantComputing ? '⟳ Generating…' : '⟳ Regenerate formants & pitch'}
+        {formantComputing ? 'Generating…' : 'Regenerate formants & pitch'}
       </div>
 
       <div className="ctx-menu__sep" />
@@ -785,6 +828,38 @@ function SpecContextMenu({
         <div key={name} className="ctx-menu__item ctx-menu__radio-row" onClick={() => { onColormapChange(name); onClose(); }}>
           <span className="ctx-menu__radio">{colormapName === name ? '●' : ''}</span>
           {label}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// Small "⋮" popover on the WRD/PHN gutters — lets the user pick which currently
+// loaded tier should play the Words/Phones role (see promoteTierToRole), for
+// TextGrids where the real word/phone-like annotations live in a tier named
+// something other than the literal "words"/"phones" loadTextGrid expects (see
+// HANDOFF.md's tier-name matching writeup). `tiers` is every currently loaded tier
+// (words, phones, custom); `activeTierId` gets a "●" marker, matching
+// SpecContextMenu's colormap radio rows.
+function TierSourceMenu({ x, y, onClose, title, tiers, activeTierId, onSelect }) {
+  const menuRef = useRef(null);
+  useEffect(() => {
+    const dismiss = (e) => { if (menuRef.current && !menuRef.current.contains(e.target)) onClose(); };
+    document.addEventListener('mousedown', dismiss);
+    return () => document.removeEventListener('mousedown', dismiss);
+  }, [onClose]);
+
+  return (
+    <div ref={menuRef} className="ctx-menu" style={{ left: x, top: y, minWidth: 190 }}>
+      <div className="ctx-menu__label">{title}</div>
+      {tiers.map(t => (
+        <div
+          key={t.id}
+          className="ctx-menu__item ctx-menu__radio-row"
+          onClick={() => { onSelect(t.id); onClose(); }}
+        >
+          <span className="ctx-menu__radio">{activeTierId === t.id ? '●' : ''}</span>
+          {t.label}
         </div>
       ))}
     </div>
@@ -1041,7 +1116,6 @@ export default function App() {
   const [autoPlayTile, setAutoPlayTile] = useState(false);
   const [zoomValue, setZoomValue]       = useState(72);
   const [popup, setPopup]               = useState(null);
-  const [dropping, setDropping]         = useState(false);
   const [colormapName, setColormapName] = useState('viridis');
   const [envelopeVisible, setEnvelopeVisible] = useState(true);
   const [formantVisible, setFormantVisible] = useState({ f0: false, f1: false, f2: false, f3: false });
@@ -1064,6 +1138,9 @@ export default function App() {
   const [mfaWarning, setMfaWarning]       = useState(null);   // string | null
   const [mfaWordPicker, setMfaWordPicker] = useState(null);   // { words: WordItem[], sel } | null
   const [mfaQueueOpen, setMfaQueueOpen]   = useState(false);  // dropdown visible
+  const [wordsTierName, setWordsTierName]   = useState('words');  // display/export name of whichever tier plays the Words role
+  const [phonesTierName, setPhonesTierName] = useState('phones'); // display/export name of whichever tier plays the Phones role
+  const [tierSourceMenu, setTierSourceMenu] = useState(null); // { role: 'words'|'phones', x, y } | null
   const [setupError, setSetupError]       = useState(null);   // string | null — shown before audio loads
   const [memoryWarning, setMemoryWarning] = useState(false);  // shown for audio > 30 min
   const [filePicker, setFilePicker]       = useState(null);   // { wavs, tgs } | null — shown when multiple files detected
@@ -1079,6 +1156,7 @@ export default function App() {
   const [isDirty, setIsDirty]     = useState(false);
   const savedTextGridRef          = useRef(null);   // serialized baseline after load or save
   const [showSaveConfirm, setShowSaveConfirm] = useState(false); // first-save-this-session overwrite confirmation
+  const [wavOverwriteConfirm, setWavOverwriteConfirm] = useState(null); // { file } | null — see loadWavFile
   let skipSaveConfirmInit = false;
   try { skipSaveConfirmInit = localStorage.getItem('skipSaveConfirm') === 'true'; } catch (_) {}
   const skipSaveConfirmRef = useRef(skipSaveConfirmInit); // "Don't ask me again" — persisted across sessions
@@ -1086,6 +1164,8 @@ export default function App() {
   const MFA_SERVER = 'http://localhost:5050';
   const mfaQueueRef = useRef([]);
   const mfaProcessingRef = useRef(false);
+  const wordsTierNameRef = useRef('words');
+  const phonesTierNameRef = useRef('phones');
   const playbackRateRef = useRef(1);
 
   const panelSplitRef  = useRef(0.25);
@@ -1223,11 +1303,17 @@ export default function App() {
   }, []);
 
   // ── Undo ──────────────────────────────────────────────────────────────
+  // Snapshots include wordsTierName/phonesTierName alongside the tier data itself,
+  // so a "use this tier as Words/Phones" swap (promoteTierToRole) is undoable just
+  // like any other edit — undoing it must restore not just the item arrays but also
+  // which tier's name was playing each role.
   const pushUndo = useCallback(() => {
     undoStackRef.current.push({
       words:  wordsRef.current.map(it => ({ ...it })),
       phones: phonesRef.current.map(it => ({ ...it })),
       customTiers: customTiersRef.current.map(t => ({ ...t, items: t.items.map(i => ({ ...i })) })),
+      wordsTierName: wordsTierNameRef.current,
+      phonesTierName: phonesTierNameRef.current,
     });
     if (undoStackRef.current.length > 100) undoStackRef.current.shift();
     redoStackRef.current = []; // a new edit invalidates the redo history
@@ -1244,16 +1330,25 @@ export default function App() {
       words:  wordsRef.current.map(it => ({ ...it })),
       phones: phonesRef.current.map(it => ({ ...it })),
       customTiers: customTiersRef.current.map(t => ({ ...t, items: t.items.map(i => ({ ...i })) })),
+      wordsTierName: wordsTierNameRef.current,
+      phonesTierName: phonesTierNameRef.current,
     });
     wordsRef.current  = snap.words;
     phonesRef.current = snap.phones;
     customTiersRef.current = snap.customTiers || [];
+    wordsTierNameRef.current = snap.wordsTierName ?? 'words';
+    phonesTierNameRef.current = snap.phonesTierName ?? 'phones';
     setWords([...snap.words]);
     setPhones([...snap.phones]);
     setCustomTiers([...(snap.customTiers || [])]);
+    setWordsTierName(wordsTierNameRef.current);
+    setPhonesTierName(phonesTierNameRef.current);
     setUndoCount(undoStackRef.current.length);
     setRedoCount(redoStackRef.current.length);
-    const current = serializeTextGrid(durationRef.current, snap.words, snap.phones, snap.customTiers || []);
+    const current = serializeTextGrid(
+      durationRef.current, snap.words, snap.phones, snap.customTiers || [],
+      false, wordsTierNameRef.current, phonesTierNameRef.current,
+    );
     setIsDirty(current !== savedTextGridRef.current);
   }, []);
 
@@ -1265,16 +1360,25 @@ export default function App() {
       words:  wordsRef.current.map(it => ({ ...it })),
       phones: phonesRef.current.map(it => ({ ...it })),
       customTiers: customTiersRef.current.map(t => ({ ...t, items: t.items.map(i => ({ ...i })) })),
+      wordsTierName: wordsTierNameRef.current,
+      phonesTierName: phonesTierNameRef.current,
     });
     wordsRef.current  = snap.words;
     phonesRef.current = snap.phones;
     customTiersRef.current = snap.customTiers || [];
+    wordsTierNameRef.current = snap.wordsTierName ?? 'words';
+    phonesTierNameRef.current = snap.phonesTierName ?? 'phones';
     setWords([...snap.words]);
     setPhones([...snap.phones]);
     setCustomTiers([...(snap.customTiers || [])]);
+    setWordsTierName(wordsTierNameRef.current);
+    setPhonesTierName(phonesTierNameRef.current);
     setUndoCount(undoStackRef.current.length);
     setRedoCount(redoStackRef.current.length);
-    const current = serializeTextGrid(durationRef.current, snap.words, snap.phones, snap.customTiers || []);
+    const current = serializeTextGrid(
+      durationRef.current, snap.words, snap.phones, snap.customTiers || [],
+      false, wordsTierNameRef.current, phonesTierNameRef.current,
+    );
     setIsDirty(current !== savedTextGridRef.current);
   }, []);
   // ── Draw helpers ──────────────────────────────────────────────────────
@@ -1639,7 +1743,12 @@ export default function App() {
       const fill = rgbaFromRgb(paintRgb, fillAlpha);
       const stroke = rgbaFromRgb(paintRgb, strokeAlpha);
       const tilePadY = Math.max(8, Math.min(22, rowH * 0.22));
-      const exposedPadX = Math.max(2, Math.min(4, bw * 0.02));
+      // Fixed, not scaled by bw: cross-tier snapping/drag-guide lines land at the exact
+      // same pixel on every tier's canvas (drawSnapGuide uses the same tX(t, w)), so a
+      // width-dependent pad here would put each tier's visible edge a different distance
+      // from that shared line even when their timestamps are perfectly snapped/aligned —
+      // word tiles (wide) used to sit ~4px off while phoneme tiles (narrow) sat ~2px off.
+      const exposedPadX = 1.5;
       const { joinsLeft = false, joinsRight = false } = adjacencyById.get(item.id) || {};
       const leftPadX = joinsLeft ? 0 : exposedPadX;
       const rightPadX = joinsRight ? 0 : exposedPadX;
@@ -2305,12 +2414,24 @@ export default function App() {
       // Y-zoom is relative to this file's own peak — a new file shouldn't inherit the
       // previous file's manual multiplier.
       yZoomRef.current = 1;
+      // Reset which tier plays the Words/Phones role — loadTextGrid (if a TextGrid
+      // accompanies this file) will overwrite these with whatever it actually finds;
+      // this covers the audio-only case so a stale name from the previous file isn't
+      // carried over.
+      wordsTierNameRef.current = 'words';   setWordsTierName('words');
+      phonesTierNameRef.current = 'phones'; setPhonesTierName('phones');
       // This ref must only ever point at the wav actually backing the current
       // AudioBuffer. loadPublicPair re-sets it right after this call resolves (for the
       // public/ auto-load path); for any other source (drag-and-drop, or the More menu's
       // Load Wav) it must stay null so calcSpecForView/calcFormantForView's guard clauses
       // correctly no-op instead of sending DSP requests against a stale filename.
       publicWavFileRef.current = null;
+      // "Don't ask me again" for the save-overwrite confirm is scoped to the file it
+      // was dismissed for, not a permanent global skip — otherwise dismissing it once
+      // on file A would silently skip the warning forever on every other file loaded
+      // afterward, including ones the user has never confirmed overwriting.
+      skipSaveConfirmRef.current = false;
+      try { localStorage.removeItem('skipSaveConfirm'); } catch (_) {}
     }
 
     audioBufferRef.current = buffer;
@@ -2355,11 +2476,18 @@ export default function App() {
   const loadTextGrid = useCallback((text) => {
     const { duration: dur, tiers } = parseTextGrid(text);
     const tierLower = Object.fromEntries(Object.entries(tiers).map(([k, v]) => [k.toLowerCase(), v]));
+    // Preserve whichever exact-cased tier name loadTextGrid actually matched (e.g. a
+    // file might use "Words" or "words") — this is what gets written back out on
+    // export/save (see serializeTextGrid), not a hardcoded literal.
+    const wordsKey  = Object.keys(tiers).find(k => k.toLowerCase() === 'words');
+    const phonesKey = Object.keys(tiers).find(k => ['phones', 'phonemes', 'phone'].includes(k.toLowerCase()));
     const w = assignRows(withIds(tierLower['words'] || []));
     const p = assignRows(withIds(tierLower['phones'] || tierLower['phonemes'] || tierLower['phone'] || []));
     durationRef.current = dur; setDuration(dur);
     wordsRef.current = w;      setWords(w);
     phonesRef.current = p;     setPhones(p);
+    wordsTierNameRef.current = wordsKey || 'words';    setWordsTierName(wordsKey || 'words');
+    phonesTierNameRef.current = phonesKey || 'phones'; setPhonesTierName(phonesKey || 'phones');
 
     // Load any extra tiers as custom tiers
     const builtinKeys = new Set(['words', 'phones', 'phonemes', 'phone']);
@@ -2375,14 +2503,17 @@ export default function App() {
     setCustomTiers([...extraTiers]);
 
     viewRef.current = { t0: 0, t1: Math.min(dur, 20) };
-    savedTextGridRef.current = serializeTextGrid(dur, w, p, extraTiers);
+    savedTextGridRef.current = serializeTextGrid(dur, w, p, extraTiers, false, wordsKey || 'words', phonesKey || 'phones');
     setIsDirty(false);
     redraw();
   }, [redraw]);
 
   // ── Export TextGrid ───────────────────────────────────────────────────
   const doExportTextGrid = useCallback((filename, praatCompat) => {
-    const text = serializeTextGrid(durationRef.current, wordsRef.current, phonesRef.current, customTiersRef.current, praatCompat);
+    const text = serializeTextGrid(
+      durationRef.current, wordsRef.current, phonesRef.current, customTiersRef.current,
+      praatCompat, wordsTierNameRef.current, phonesTierNameRef.current,
+    );
     const blob = new Blob([text], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -2395,7 +2526,10 @@ export default function App() {
   // ── Save TextGrid to public/ (dev server only) ───────────────────────
   const saveTextGrid = useCallback(async () => {
     const filename = tgFileNameRef.current + '.TextGrid';
-    const content  = serializeTextGrid(durationRef.current, wordsRef.current, phonesRef.current, customTiersRef.current);
+    const content  = serializeTextGrid(
+      durationRef.current, wordsRef.current, phonesRef.current, customTiersRef.current,
+      false, wordsTierNameRef.current, phonesTierNameRef.current,
+    );
     setSaveState('saving');
     try {
       const res = await fetch('/api/save-textgrid', {
@@ -2448,6 +2582,56 @@ export default function App() {
       fetchOverviewChunk(getChunkIndex(t0));
     } catch(e) { console.warn('Audio auto-load failed:', e); }
   }, [loadAudio, loadTextGrid, computePaddedWindow, fetchEnhancedSpec, fetchOverviewChunk]);
+
+  // Loads a wav picked via "Load Wav" or drag-and-drop as if it had been sitting in
+  // public/ all along. dsp_server.py can only read a real file path — it has no way
+  // to see bytes the browser is holding in memory — so this uploads the file to
+  // /api/upload-wav (a new dev-only endpoint) first, then follows loadPublicPair's own
+  // tail exactly (publicWavFileRef set, enhanced spectrogram fetched immediately for
+  // the starting view). If the upload fails for any reason — a production build,
+  // where this endpoint doesn't exist at all; a network error — falls back to plain
+  // loadAudio: today's non-public-file behavior, where playback/waveform still work
+  // and the enhanced spectrogram just silently stays unavailable.
+  const doLoadWavFile = useCallback(async (file) => {
+    try {
+      const res = await fetch(`/api/upload-wav?filename=${encodeURIComponent(file.name)}`, {
+        method: 'POST',
+        body: file,
+      });
+      if (!res.ok) throw new Error(await res.text());
+      await loadAudio(file);
+      publicWavFileRef.current = file.name;
+      setSetupError(null);
+      const { t0, t1 } = viewRef.current;
+      const { bufT0, bufT1 } = computePaddedWindow(t0, t1);
+      fetchEnhancedSpec(bufT0, bufT1);
+      fetchOverviewChunk(getChunkIndex(t0));
+    } catch (e) {
+      console.warn('[loadWavFile] upload to public/ failed — loading without the enhanced spectrogram:', e);
+      await loadAudio(file);
+    }
+  }, [loadAudio, computePaddedWindow, fetchEnhancedSpec, fetchOverviewChunk]);
+
+  // Entry point for "Load Wav" / drag-and-drop — checks for a public/ name collision
+  // first (via the same /api/public-files listing the startup scan uses) and asks for
+  // confirmation before overwriting (see WavOverwriteModal) rather than silently
+  // replacing a file the user may not realize shares that name.
+  const loadWavFile = useCallback(async (file) => {
+    let collision = false;
+    try {
+      const res = await fetch('/api/public-files');
+      if (res.ok) {
+        const { wavs } = await res.json();
+        collision = wavs.some(w => w.toLowerCase() === file.name.toLowerCase());
+      }
+    } catch (_) {
+      // /api/public-files unreachable (e.g. production build) — nothing could be
+      // uploaded either way, so no collision is possible; doLoadWavFile's own
+      // try/catch handles the upload failure gracefully.
+    }
+    if (collision) setWavOverwriteConfirm({ file });
+    else doLoadWavFile(file);
+  }, [doLoadWavFile]);
 
   // ── Effects ───────────────────────────────────────────────────────────
 
@@ -3474,30 +3658,6 @@ export default function App() {
     return () => { c1(); c2(); };
   }, [addTierEditInteraction, words, phones]);
 
-  // Drag-and-drop files
-  useEffect(() => {
-    const onOver  = (e) => { e.preventDefault(); setDropping(true); };
-    const onLeave = (e) => { if (!e.relatedTarget) setDropping(false); };
-    const onDrop  = (e) => {
-      e.preventDefault(); setDropping(false);
-      const f = e.dataTransfer.files[0]; if (!f) return;
-      if (f.name.toLowerCase().endsWith('.textgrid')) {
-        tgFileNameRef.current = f.name.replace(/\.TextGrid$/i, '');
-        const reader = new FileReader();
-        reader.onload = (ev) => loadTextGrid(ev.target.result);
-        reader.readAsText(f);
-      }
-    };
-    window.addEventListener('dragover', onOver);
-    window.addEventListener('dragleave', onLeave);
-    window.addEventListener('drop', onDrop);
-    return () => {
-      window.removeEventListener('dragover', onOver);
-      window.removeEventListener('dragleave', onLeave);
-      window.removeEventListener('drop', onDrop);
-    };
-  }, [loadAudio, loadTextGrid]);
-
   // ── Custom tier canvas interactions ──────────────────────────────────
   useEffect(() => {
     const cleanups = [];
@@ -3598,7 +3758,7 @@ export default function App() {
   }, []);
   const handleSpecMouseLeave = useCallback(() => setSpecCrosshair(null), []);
 
-  const handleAudioFile = (e) => { if (e.target.files[0]) loadAudio(e.target.files[0]); };
+  const handleAudioFile = (e) => { if (e.target.files[0]) loadWavFile(e.target.files[0]); };
   const handleTGFile    = (e) => {
     const f = e.target.files[0]; if (!f) return;
     tgFileNameRef.current = f.name.replace(/\.TextGrid$/i, '');
@@ -3677,23 +3837,9 @@ export default function App() {
     if (newPhones.length === 0)
       throw new Error('MFA returned no non-silent phones for this segment — alignment may have failed');
 
-    // ── Overlap guard: if any new phone overlaps a kept phone, warn ─────────
-    for (const np of newPhones) {
-      for (const kp of kept) {
-        const overlaps = np.t0 < kp.t1 - 1e-6 && np.t1 > kp.t0 + 1e-6;
-        if (overlaps) {
-          // Clamp kept phone to not overlap with MFA result
-          // (MFA result takes priority within the selected segment)
-          console.warn(
-            `MFA phone [${np.t0.toFixed(3)}, ${np.t1.toFixed(3)}] '${np.text}' ` +
-            `overlaps existing phone [${kp.t0.toFixed(3)}, ${kp.t1.toFixed(3)}] '${kp.text}' — ` +
-            `existing phone will be trimmed`
-          );
-        }
-      }
-    }
-
-    // Trim kept phones that partially overlap the segment boundary
+    // Trim kept phones that partially overlap the segment boundary. MFA result takes
+    // priority within the selected segment, so any kept phone that pokes into the
+    // segment gets clamped back to whichever segment edge it crosses.
     const trimmed = kept.map(p => {
       if (p.t1 > segT0 && p.t0 < segT0) return { ...p, t1: segT0 };  // overlaps left edge
       if (p.t0 < segT1 && p.t1 > segT1) return { ...p, t0: segT1 };  // overlaps right edge
@@ -3762,8 +3908,7 @@ export default function App() {
 
       pushUndo();
       const merged = applyMfaResult(result.phones, segT0, segT1);
-      phonesRef.current = merged;
-      setPhones([...merged]);
+      commitTierItems('phones', merged);
       redraw();
 
       updateQueue(q => q.filter(j => j.id !== next.id));
@@ -3777,7 +3922,7 @@ export default function App() {
       const remaining = mfaQueueRef.current.find(j => j.status === 'pending');
       if (remaining) processNextMfaJob();
     }
-  }, [applyMfaResult, pushUndo, redraw, updateQueue]);
+  }, [applyMfaResult, commitTierItems, pushUndo, redraw, updateQueue]);
 
   const enqueueRunMfa = useCallback((targetWords, sel) => {
     const sorted = [...targetWords].sort((a, b) => a.t0 - b.t0);
@@ -3881,14 +4026,91 @@ export default function App() {
     if (autoPlayTileRef.current) { stopPlay(); startPlay(w.t0); }
   }, [syncSelectionState, updateTimeDisplay, redraw, stopPlay, startPlay]);
 
+  // Promotes *tierId*'s data into the Words or Phones role. MFA itself is untouched
+  // by this: it always reads wordsRef / writes phonesRef, so once a tier is promoted
+  // into that role, MFA transparently picks it up without needing to know it exists.
+  // Export always uses each role's *current* name (wordsTierNameRef/phonesTierNameRef)
+  // rather than a hardcoded "words"/"phones" literal — see serializeTextGrid.
+  //
+  // Whatever was previously playing the role is only preserved as a leftover custom
+  // tier if it actually had content — the common case (nothing was there, since the
+  // whole point of this picker is TextGrids that don't have a literal "words"/"phones"
+  // tier at all) just promotes cleanly with no phantom empty tier left behind.
+  const promoteTierToRole = useCallback((role, tierId) => {
+    if (tierId === role) return; // already playing that role
+    pushUndo();
+    clearSelection(); // tile selections reference tierIds whose identity is about to change
+
+    const isWordsRole = role === 'words';
+    const roleRef      = isWordsRole ? wordsRef : phonesRef;
+    const roleNameRef   = isWordsRole ? wordsTierNameRef : phonesTierNameRef;
+    const setRoleItems  = isWordsRole ? setWords : setPhones;
+    const setRoleName   = isWordsRole ? setWordsTierName : setPhonesTierName;
+
+    const displacedItems = roleRef.current;
+    const displacedName  = roleNameRef.current;
+    const displacedHasContent = displacedItems.length > 0;
+
+    const otherRole = isWordsRole ? 'phones' : 'words';
+    if (tierId === otherRole) {
+      // Direct words<->phones swap — both roles always have *some* identity, so
+      // there's no "phantom empty tier" concern here.
+      const otherRef     = isWordsRole ? phonesRef : wordsRef;
+      const otherNameRef = isWordsRole ? phonesTierNameRef : wordsTierNameRef;
+      const otherSetItems = isWordsRole ? setPhones : setWords;
+      const otherSetName  = isWordsRole ? setPhonesTierName : setWordsTierName;
+
+      roleRef.current = otherRef.current;         setRoleItems([...roleRef.current]);
+      roleNameRef.current = otherNameRef.current; setRoleName(roleNameRef.current);
+      otherRef.current = displacedItems;          otherSetItems([...displacedItems]);
+      otherNameRef.current = displacedName;       otherSetName(displacedName);
+    } else {
+      const custom = customTiersRef.current.find(t => t.id === tierId);
+      if (!custom) return;
+
+      roleRef.current = custom.items;    setRoleItems([...custom.items]);
+      roleNameRef.current = custom.name; setRoleName(custom.name);
+
+      const ct = displacedHasContent
+        // Something worth keeping was displaced — leave it behind in the promoted
+        // tier's old slot, under its own original name. Always visible: true here,
+        // not `...t`'s own flag — the displaced content is a different tier's data
+        // and has no relationship to whatever visibility the promoted tier happened
+        // to have (spreading `...t` here previously cross-wired the two, so hiding
+        // the promoted tier before promoting it could silently hide the displaced
+        // content too).
+        ? customTiersRef.current.map(t =>
+            t.id === tierId ? { ...t, name: displacedName, items: displacedItems, visible: true } : t
+          )
+        // Nothing to preserve — the promoted tier just leaves the custom-tier list
+        // entirely, with no renamed placeholder left behind.
+        : customTiersRef.current.filter(t => t.id !== tierId);
+      customTiersRef.current = ct; setCustomTiers([...ct]);
+    }
+
+    redraw();
+  }, [pushUndo, clearSelection, redraw]);
+
+  // Every tier currently loaded, for the WRD/PHN gutters' "⋮" tier-role pickers.
+  // Plain tier names only (no "WRD —"/"PHN —" prefix) — the popover's own title
+  // already says which role this list is for, so prefixing here just made the
+  // built-in options look like unrelated, differently-named entries.
+  // A custom tier whose name exactly matches whichever name the built-in row is
+  // currently showing (e.g. a custom tier literally named "words") would otherwise
+  // render as a second, indistinguishable-by-text row — mark it explicitly so the
+  // two are never confusable, same idea as customTierLabel's "(tier)" fallback.
+  const tierSourceOptions = [
+    { id: 'words', label: wordsTierName },
+    { id: 'phones', label: phonesTierName },
+    ...customTiers.map(t => ({
+      id: t.id,
+      label: (t.name === wordsTierName || t.name === phonesTierName) ? `${t.name} (tier)` : t.name,
+    })),
+  ];
+
   // ── JSX ───────────────────────────────────────────────────────────────
   return (
     <>
-      <div className={`drop-overlay${dropping ? ' active' : ''}`}>
-        <div style={{ fontSize: 32 }}>🎵</div>
-        <div>Drop audio or TextGrid file to load</div>
-      </div>
-
       {setupError && (
         <div style={{
           position: 'fixed', inset: 0, zIndex: 9999,
@@ -3922,6 +4144,19 @@ export default function App() {
               try { localStorage.setItem('skipSaveConfirm', 'true'); } catch (_) {}
             }
             saveTextGrid();
+          }}
+        />
+      )}
+
+      {/* Confirms before "Load Wav"/drag-and-drop overwrites a same-named public/ file */}
+      {wavOverwriteConfirm && (
+        <WavOverwriteModal
+          filename={wavOverwriteConfirm.file.name}
+          onCancel={() => setWavOverwriteConfirm(null)}
+          onConfirm={() => {
+            const f = wavOverwriteConfirm.file;
+            setWavOverwriteConfirm(null);
+            doLoadWavFile(f);
           }}
         />
       )}
@@ -4355,18 +4590,19 @@ export default function App() {
           <div className="tier-visibility-bar">
             <span className="tier-visibility-title">SHOW</span>
             {[
-              { label: 'WRD', visible: wordsVisible, toggle: v => setWordsVisible(v) },
-              { label: 'PHN', visible: phonesVisible, toggle: v => setPhonesVisible(v) },
+              { id: 'words', label: 'WRD', visible: wordsVisible, toggle: v => setWordsVisible(v) },
+              { id: 'phones', label: 'PHN', visible: phonesVisible, toggle: v => setPhonesVisible(v) },
               ...customTiers.map(t => ({
-                label: t.name.toUpperCase().slice(0, 4),
+                id: t.id,
+                label: customTierLabel(t.name),
                 visible: t.visible,
                 toggle: v => {
                   const ct = customTiersRef.current.map(x => x.id === t.id ? { ...x, visible: v } : x);
                   customTiersRef.current = ct; setCustomTiers([...ct]);
                 },
               })),
-            ].map(({ label, visible, toggle }) => (
-              <label key={label} className="tier-visibility-label">
+            ].map(({ id, label, visible, toggle }) => (
+              <label key={id} className="tier-visibility-label">
                 <input
                   type="checkbox"
                   className="tier-visibility-check"
@@ -4404,6 +4640,14 @@ export default function App() {
             <div className="tier-gutter">
               <span className="gutter-label">WRD</span>
               <span className="gutter-subtitle">Words</span>
+              <button
+                className={`gutter-more-btn${wordsTierName !== 'words' ? ' gutter-more-btn--active' : ''}`}
+                title={`WRD pulls from: ${wordsTierName} (click to change)`}
+                onClick={(e) => {
+                  const r = e.currentTarget.getBoundingClientRect();
+                  setTierSourceMenu({ role: 'words', x: r.left, y: r.bottom + 4 });
+                }}
+              >⋮</button>
             </div>
             <canvas ref={wordsCanvasRef} />
           </div>
@@ -4435,6 +4679,14 @@ export default function App() {
             <div className="tier-gutter">
               <span className="gutter-label">PHN</span>
               <span className="gutter-subtitle">Phonemes</span>
+              <button
+                className={`gutter-more-btn${phonesTierName !== 'phones' ? ' gutter-more-btn--active' : ''}`}
+                title={`PHN pulls from: ${phonesTierName} (click to change)`}
+                onClick={(e) => {
+                  const r = e.currentTarget.getBoundingClientRect();
+                  setTierSourceMenu({ role: 'phones', x: r.left, y: r.bottom + 4 });
+                }}
+              >⋮</button>
             </div>
             <canvas ref={phonesCanvasRef} />
           </div>
@@ -4476,7 +4728,7 @@ export default function App() {
                 >
                   <div className="tier-gutter" style={{ flexDirection: 'column', gap: 2 }}>
                     <span style={{ maxWidth: 44, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 9 }} title={tier.name}>
-                      {tier.name.toUpperCase().slice(0, 4)}
+                      {customTierLabel(tier.name)}
                     </span>
                     <button
                       className="tier-delete-btn"
@@ -4574,6 +4826,18 @@ export default function App() {
           <img src="/loop-alert.gif" alt="" style={{ height: 16, borderRadius: 3, flexShrink: 0 }} />
           <span>Looping selection…</span>
         </div>
+      )}
+
+      {/* ── WRD/PHN gutters' "⋮" tier-role picker (see TierSourceMenu/promoteTierToRole) */}
+      {tierSourceMenu && (
+        <TierSourceMenu
+          x={tierSourceMenu.x} y={tierSourceMenu.y}
+          onClose={() => setTierSourceMenu(null)}
+          title={tierSourceMenu.role === 'words' ? 'WRD will pull from:' : 'PHN will pull from:'}
+          tiers={tierSourceOptions}
+          activeTierId={tierSourceMenu.role}
+          onSelect={(id) => promoteTierToRole(tierSourceMenu.role, id)}
+        />
       )}
 
       {/* ── MFA word-picker modal (shown when words overlap in the selection) */}

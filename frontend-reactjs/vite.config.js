@@ -132,6 +132,38 @@ function publicFilesPlugin() {
         });
       });
 
+      // Lets "Load Wav"/drag-and-drop load any wav from anywhere on disk and still get
+      // the enhanced Python spectrogram — dsp_server.py can only read a real file path,
+      // it has no way to see bytes the browser is holding in memory, so the frontend
+      // uploads the raw file here first (App.jsx's loadWavFile/doLoadWavFile), then
+      // treats it exactly like a public/-auto-loaded file. Body is the raw wav bytes,
+      // NOT JSON — collected as Buffer chunks (not a string) so binary data survives
+      // intact; the filename travels as a query param instead of a JSON field.
+      server.middlewares.use('/api/upload-wav', (req, res) => {
+        if (req.method !== 'POST') {
+          res.statusCode = 405; res.end('Method Not Allowed'); return;
+        }
+        const filename = new URL(req.url, 'http://localhost').searchParams.get('filename') || '';
+        // Safety: only allow writing .wav files inside public/ (matches the existing
+        // path.basename() pattern used by /api/save-textgrid against path traversal).
+        const safe = path.basename(filename);
+        if (!/\.wav$/i.test(safe)) {
+          res.statusCode = 400; res.end('Only .wav files allowed'); return;
+        }
+        const chunks = [];
+        req.on('data', chunk => chunks.push(chunk));
+        req.on('end', () => {
+          try {
+            const dest = path.resolve(__dirname, 'public', safe);
+            fs.writeFileSync(dest, Buffer.concat(chunks));
+            res.setHeader('Content-Type', 'application/json');
+            res.end(JSON.stringify({ ok: true, saved: safe }));
+          } catch (e) {
+            res.statusCode = 500; res.end(JSON.stringify({ ok: false, error: String(e) }));
+          }
+        });
+      });
+
       server.middlewares.use('/api/save-textgrid', (req, res) => {
         if (req.method !== 'POST') {
           res.statusCode = 405; res.end('Method Not Allowed'); return;

@@ -24,9 +24,7 @@ Open **http://localhost:5173** — the audio and TextGrid load automatically.
 
 **Multiple files:** if `public/` contains more than one `.wav` or `.TextGrid`, a picker modal appears on startup letting you choose which pair to open.
 
-You can also load files at any time without restarting:
-- Click **More ⋮** in the toolbar, then **Load TextGrid** or **Load Wav**, to swap in a new TextGrid or audio file
-- **Drag and drop** a `.wav` or `.TextGrid` file anywhere on the page
+You can also load files at any time without restarting — click **More ⋮** in the toolbar, then **Load TextGrid** or **Load Wav**, to swap in a new TextGrid or audio file. **Load Wav** works for a wav anywhere on disk, not just files already in `public/` — if the file you pick isn't already there, it's copied in automatically so the enhanced spectrogram works for it too; you'll be asked to confirm first if that would overwrite an existing file of the same name.
 
 <video src="https://github.com/user-attachments/assets/642f285d-c20b-4bd4-8114-e0bb2c3ec80d" controls width="100%"></video>
 
