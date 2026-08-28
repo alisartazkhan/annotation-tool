@@ -24,12 +24,16 @@ Both modes share `handle_request()`. The "spec" object:
     "stripT0": <float>,
     "stripT1": <float>
   }
-The "formants" object (Praat Burg formant track):
+The "formants" object (Praat Burg formant track, plus pitch/F0 from the same Sound):
   {
     "f1": [...],                   // Hz per frame (0 = unvoiced)
     "f2": [...],
     "f3": [...],
-    "times": [...],                // center time of each frame in seconds
+    "times": [...],                // center time of each formant frame in seconds
+    "f0": [...],                   // Hz per frame (0 = unvoiced), Praat autocorrelation pitch
+    "timesF0": [...],              // center time of each pitch frame — a different grid than
+                                    // `times` above (formants and pitch use different default
+                                    // frame time steps), so it's returned separately
     "regionT0": <float>,
     "sr": <int>
   }
@@ -104,7 +108,9 @@ def _colormap_lut(name, n=256):
         r = np.clip(1.5 - np.abs(4*ts - 3), 0, 1)
         g = np.clip(1.5 - np.abs(4*ts - 2), 0, 1)
         b = np.clip(1.5 - np.abs(4*ts - 1), 0, 1)
-        lut = np.stack([r, g, b], axis=1) * 255
+        rgb = np.stack([r, g, b], axis=1)
+        luma = rgb @ np.array([0.2126, 0.7152, 0.0722])
+        lut = np.rint((luma[:, None] + (rgb - luma[:, None]) * 0.72) * 0.82 * 255)
     elif name == "greys":
         lut = np.stack([ts, ts, ts], axis=1) * 255
     else:
@@ -210,6 +216,33 @@ def compute_spectrogram(y_slice, sr, slice_t0, t0, t1, colormap, pw=1200, ph=200
 
 FORMANT_WINDOW_SEC = 0.025  # "Window length" arg to "To Formant (burg)" below
 FORMANT_CHUNK_SEC = 3.0     # quantization grain for the analysis window's [a0, a1] bounds
+PITCH_FLOOR_HZ = 75.0    # "To Pitch..." floor/ceiling — Praat's own long-standing defaults,
+PITCH_CEILING_HZ = 600.0 # wide enough to cover typical adult male/female speaking pitch
+
+def compute_pitch(snd, t0, t1):
+    """Praat autocorrelation pitch (F0) tracking, reusing the same padded/quantized
+    Sound object compute_formants already built for this request (see its docstring
+    for why the window is padded and quantized) — no separate decode needed.
+
+    Pitch's own frame grid is independent of the formant frame grid: "To Pitch"
+    derives its default time step from PITCH_FLOOR_HZ, not FORMANT_WINDOW_SEC, so
+    frame count/timing differ from the formant track. Returned as its own
+    (times, values) pair rather than forced onto the formant `times` array.
+    """
+    pitch = call(snd, "To Pitch", 0.0, PITCH_FLOOR_HZ, PITCH_CEILING_HZ)
+    n_frames = call(pitch, "Get number of frames")
+
+    times_list = []
+    f0_list = []
+    for i in range(1, n_frames + 1):
+        t = call(pitch, "Get time from frame number", i)
+        if t < t0 or t > t1:
+            continue  # padding-only frame — outside the requested region
+        f0 = call(pitch, "Get value in frame", i, "Hertz")
+        times_list.append(round(float(t), 5))
+        f0_list.append(round(float(f0), 2) if f0 == f0 else 0)  # NaN check (unvoiced)
+
+    return times_list, f0_list
 
 def compute_formants(wav_path, t0, t1):
     """Use Praat Burg algorithm to extract F1/F2/F3 for the region t0..t1.
@@ -280,11 +313,15 @@ def compute_formants(wav_path, t0, t1):
         f2_list.append(round(float(f2), 2) if f2 == f2 else 0)
         f3_list.append(round(float(f3), 2) if f3 == f3 else 0)
 
+    times_f0, f0_list = compute_pitch(snd, t0, t1)
+
     return {
         "f1": f1_list,
         "f2": f2_list,
         "f3": f3_list,
         "times": times_list,
+        "f0": f0_list,
+        "timesF0": times_f0,
         "regionT0": t0,
         "sr": int(sr),
     }

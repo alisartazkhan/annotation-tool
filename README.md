@@ -30,6 +30,12 @@ The documentation is split across four files:
 
 ## Initial Setup
 
+**Pick your platform first** — the steps are different enough that reading straight through causes confusion:
+- **macOS or Linux** → [macOS / Linux setup](#macos--linux-setup)
+- **Windows** → [Windows setup (via WSL)](#windows-setup-via-wsl) — `setup.sh` is a bash script and won't run directly on Windows
+
+### macOS / Linux setup
+
 Requirements:
 - **conda** — [Miniconda](https://docs.conda.io/en/latest/miniconda.html) or Anaconda
 - **Node.js v18+** — on macOS, easiest via [Homebrew](https://brew.sh):
@@ -58,29 +64,41 @@ This creates the necessary conda environments (`aligner`, `whisperx`, and `nemo`
 
 <video src="https://github.com/user-attachments/assets/95f06d80-a8f9-44ae-863f-acd5c6cb02d6" controls width="100%"></video>
 
-**Windows Note (Using WSL)**
-
-windows isnt supported since setup.sh is a bash script. use WSL
-
-```powershell
-wsl --install
-```
-Inside WSL, clone into wsl system
+Once setup finishes:
 ```bash
-wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
-bash Miniconda3-latest-Linux-x86_64.sh -b -p ~/miniconda3
-~/miniconda3/bin/conda init bash
-curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
-nvm install 20
+cd frontend-reactjs
+npm run dev
 ```
-```bash
-conda run -n aligner mfa model download acoustic english_us_arpa
-conda run -n aligner mfa model download dictionary english_us_arpa
-cd frontend-reactjs && npm install
-```
+Then open **http://localhost:5173** in your browser — see [USAGE.md](USAGE.md#running-the-annotation-viewer) for the full walkthrough.
 
-open http://localhost:5173
+### Windows setup (via WSL)
 
+Windows isn't supported directly since `setup.sh` is a bash script — use WSL (Windows Subsystem for Linux) instead, which gives you a real Linux environment to run the exact same setup in.
+
+1. Install WSL:
+   ```powershell
+   wsl --install
+   ```
+2. Inside WSL, clone this repository into the WSL filesystem (e.g. under `~/`, **not** `/mnt/c/...`) — accessing files across the Windows/Linux boundary is much slower.
+3. Install conda and Node.js inside WSL:
+   ```bash
+   wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
+   bash Miniconda3-latest-Linux-x86_64.sh -b -p ~/miniconda3
+   ~/miniconda3/bin/conda init bash
+   # open a new terminal, then:
+   curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
+   nvm install 20 && nvm use 20
+   ```
+4. From here on, WSL *is* Linux — run the exact same setup script as the [macOS / Linux](#macos--linux-setup) path above:
+   ```bash
+   bash setup.sh
+   ```
+5. Start the viewer:
+   ```bash
+   cd frontend-reactjs
+   npm run dev
+   ```
+   Then open **http://localhost:5173** in your browser.
 
 ---
 
@@ -99,6 +117,7 @@ code/
 ├── mfa_server.py             — Flask server for in-browser MFA re-alignment
 ├── asr/                      — ASR + initial alignment pipeline
 │   ├── transcribe.py         — entry point: audio → TextGrid
+│   ├── reference_align.py    — optional word-level correction against a known reference transcript
 │   ├── aligner.py            — MFA forced alignment
 │   ├── textgrid_writer.py    — writes the output TextGrid
 │   ├── models/
@@ -110,11 +129,20 @@ code/
 │   ├── run_whisper.sh        — convenience script for WhisperX
 │   └── run_parakeet.sh       — convenience script for Parakeet
 └── frontend-reactjs/         — annotation tool (React + Vite)
-    ├── dsp_server.py         — Python DSP: linear-frequency STFT spectrogram, mel-warped display axis (librosa), run as a persistent worker + formants (parselmouth/Praat)
-    ├── vite.config.js        — Vite config + dev-server middleware (/api/compute-dsp, /api/save-textgrid)
-    ├── public/               — place your .wav and .TextGrid here
+    ├── dsp_server.py         — Python DSP: linear-frequency STFT spectrogram, mel-warped display axis (librosa), run as a persistent worker + formants & pitch (parselmouth/Praat)
+    ├── vite.config.js        — Vite config + dev-server middleware (/api/public-files, /api/compute-dsp, /api/save-textgrid)
+    ├── public/               — place your .wav and .TextGrid here (also ipa_keys.json, the virtual IPA keyboard's key set)
     └── src/
-        └── App.jsx           — main application
+        ├── App.jsx           — main application: state, canvas drawing, interaction
+        ├── parseTextGrid.js  — Praat TextGrid parser + serializer
+        ├── dsp.js            — DSP helpers used on the main thread (mel spectrogram, LPC formants, colormaps)
+        ├── specWorker.js     — Web Worker: base mel spectrogram computed once on load
+        ├── mfaWorker.js      — Web Worker: encodes audio + talks to mfa_server.py for in-browser re-alignment
+        ├── canvasUtils.js    — canvas HiDPI setup + time formatting
+        ├── shortcuts.js      — content for the in-app keyboard-shortcuts / tile-colors popover
+        └── index.css         — all styles
 ```
+
+See [frontend-reactjs/HANDOFF.md](frontend-reactjs/HANDOFF.md) for the full internals — architecture, data model, and a running history of feature/bugfix decisions.
 
 

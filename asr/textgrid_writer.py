@@ -49,8 +49,8 @@ def write_textgrid(result: Dict[str, Any], out_path: Path) -> None:
     phoneme_intervals = _collect_phonemes(result, segments)
 
     lines = _format_header(total_end, n_tiers=2)
-    lines += _format_words_tier(word_intervals, total_end, tier_idx=1)
-    lines += _format_phonemes_tier(phoneme_intervals, total_end, tier_idx=2)
+    lines += _format_tier(word_intervals, total_end, tier_idx=1, name="Words", include_score=True)
+    lines += _format_tier(phoneme_intervals, total_end, tier_idx=2, name="Phonemes")
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -139,40 +139,25 @@ def _format_header(total_end: float, n_tiers: int) -> List[str]:
     ]
 
 
-def _format_words_tier(
+def _format_tier(
     intervals: List[Dict[str, Any]],
     total_end: float,
     tier_idx: int,
+    name: str,
+    include_score: bool = False,
 ) -> List[str]:
     filled = [iv for iv in _fill_gaps(intervals, total_end) if iv["text"]]
-    lines  = _tier_header("Words", "IntervalTier", total_end, len(filled), tier_idx)
+    lines  = _tier_header(name, "IntervalTier", total_end, len(filled), tier_idx)
     for i, iv in enumerate(filled, 1):
-        score = iv.get("score")
         lines += [
             f"        intervals [{i}]:",
             f"            xmin = {iv['start']}",
             f"            xmax = {iv['end']}",
             f'            text = "{iv["text"]}"',
         ]
+        score = iv.get("score") if include_score else None
         if score is not None:
             lines.append(f"            score = {score:.4f}")
-    return lines
-
-
-def _format_phonemes_tier(
-    intervals: List[Dict[str, Any]],
-    total_end: float,
-    tier_idx: int,
-) -> List[str]:
-    filled = [iv for iv in _fill_gaps(intervals, total_end) if iv["text"]]
-    lines  = _tier_header("Phonemes", "IntervalTier", total_end, len(filled), tier_idx)
-    for i, iv in enumerate(filled, 1):
-        lines += [
-            f"        intervals [{i}]:",
-            f"            xmin = {iv['start']}",
-            f"            xmax = {iv['end']}",
-            f'            text = "{iv["text"]}"',
-        ]
     return lines
 
 

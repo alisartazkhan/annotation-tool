@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 
-_CHECKPOINT = "tiny.en"
+_CHECKPOINT = "large-v3-turbo" # "large-v3-turbo" , "tiny.en"
 
 
 class WhisperASR:

@@ -22,11 +22,13 @@ export function viridis(t) {
 
 export function jet(t) {
   t = Math.max(0, Math.min(1, t));
-  return [
-    Math.round(Math.max(0, Math.min(1, 1.5 - Math.abs(4*t - 3))) * 255),
-    Math.round(Math.max(0, Math.min(1, 1.5 - Math.abs(4*t - 2))) * 255),
-    Math.round(Math.max(0, Math.min(1, 1.5 - Math.abs(4*t - 1))) * 255),
+  const rgb = [
+    Math.max(0, Math.min(1, 1.5 - Math.abs(4*t - 3))),
+    Math.max(0, Math.min(1, 1.5 - Math.abs(4*t - 2))),
+    Math.max(0, Math.min(1, 1.5 - Math.abs(4*t - 1))),
   ];
+  const luma = rgb[0] * 0.2126 + rgb[1] * 0.7152 + rgb[2] * 0.0722;
+  return rgb.map(channel => Math.round((luma + (channel - luma) * 0.72) * 0.82 * 255));
 }
 
 export function greys(t) {
@@ -137,102 +139,3 @@ export function buildMelSpectrogram(audioBuffer, colormapFn = inferno) {
   return { spec, N_MELS, colormapFn, duration: ch.length / sr, frames, hop: HOP, sr };
 }
 
-
-// ── RMS envelope ─────────────────────────────────────────────────────────
-
-export function buildRmsEnvelope(audioBuffer) {
-  const sr = audioBuffer.sampleRate;
-  const ch = audioBuffer.getChannelData(0);
-  const WIN = Math.round(sr / 100);
-  const frames = Math.floor((ch.length - WIN) / WIN) + 1;
-  const env = new Float32Array(frames);
-
-  for (let fr = 0; fr < frames; fr++) {
-    const off = fr * WIN;
-    let sum = 0;
-    for (let i = 0; i < WIN; i++) { const v = ch[off + i] || 0; sum += v * v; }
-    env[fr] = Math.sqrt(sum / WIN);
-  }
-
-  let mx = 0;
-  for (let i = 0; i < frames; i++) if (env[i] > mx) mx = env[i];
-  if (mx > 0) for (let i = 0; i < frames; i++) env[i] /= mx;
-
-  return { env, frames, hop: WIN, sr };
-}
-
-// ── LPC formant tracking ──────────────────────────────────────────────────
-
-function computeLpcCoeffs(frame, order) {
-  const N = frame.length;
-  const r = new Float64Array(order + 1);
-  for (let i = 0; i <= order; i++) {
-    let s = 0;
-    for (let j = 0; j < N - i; j++) s += frame[j] * frame[j + i];
-    r[i] = s;
-  }
-  const a = new Float64Array(order + 1);
-  const e = new Float64Array(order + 1);
-  a[0] = 1; e[0] = r[0];
-  for (let m = 1; m <= order; m++) {
-    let lam = 0;
-    for (let j = 1; j <= m; j++) lam += a[j - 1] * r[m - j + 1];
-    const k = -lam / e[m - 1];
-    const aCopy = a.slice();
-    for (let j = 1; j <= m; j++) a[j] = aCopy[j] + k * aCopy[m - j];
-    a[m] = k;
-    e[m] = (1 - k * k) * e[m - 1];
-  }
-  return a.slice(1);
-}
-
-function lpcToFormants(coeffs, sr) {
-  const order = coeffs.length;
-  const nfft = 4096;
-  const mag = new Float64Array(nfft / 2);
-  for (let k = 0; k < nfft / 2; k++) {
-    const w = (2 * Math.PI * k) / nfft;
-    let ar = 1, ai = 0;
-    for (let i = 0; i < order; i++) {
-      ar += coeffs[i] * Math.cos(-(i + 1) * w);
-      ai += coeffs[i] * Math.sin(-(i + 1) * w);
-    }
-    mag[k] = ar * ar + ai * ai;
-  }
-  const formants = [];
-  for (let k = 1; k < nfft / 2 - 1; k++) {
-    if (mag[k] < mag[k - 1] && mag[k] < mag[k + 1]) {
-      const hz = (k / nfft) * sr;
-      if (hz > 50 && hz < sr / 2 - 50) formants.push(hz);
-    }
-  }
-  return formants.sort((a, b) => a - b).slice(0, 3);
-}
-
-export function buildFormantTrack(audioBuffer) {
-  const sr = audioBuffer.sampleRate;
-  const ch = audioBuffer.getChannelData(0);
-  const FRAME = 1024, HOP = 256, ORDER = 12;
-  const hann = new Float64Array(FRAME);
-  for (let i = 0; i < FRAME; i++) hann[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / (FRAME - 1));
-  const frames = Math.floor((ch.length - FRAME) / HOP) + 1;
-  const f1 = new Float32Array(frames);
-  const f2 = new Float32Array(frames);
-  const f3 = new Float32Array(frames);
-  const frame = new Float64Array(FRAME);
-
-  for (let fr = 0; fr < frames; fr++) {
-    const off = fr * HOP;
-    for (let i = 0; i < FRAME; i++) {
-      const s = ch[off + i] || 0;
-      const prev = i > 0 ? (ch[off + i - 1] || 0) : 0;
-      frame[i] = (s - 0.97 * prev) * hann[i];
-    }
-    if (frame.reduce((s, v) => s + v * v, 0) < 1e-8) continue;
-    const fmts = lpcToFormants(computeLpcCoeffs(frame, ORDER), sr);
-    f1[fr] = fmts[0] || 0;
-    f2[fr] = fmts[1] || 0;
-    f3[fr] = fmts[2] || 0;
-  }
-  return { f1, f2, f3, frames, hop: HOP, sr };
-}

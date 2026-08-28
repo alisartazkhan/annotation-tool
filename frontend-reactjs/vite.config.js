@@ -93,6 +93,20 @@ function runDsp(req) {
   });
 }
 
+// Shared by /api/compute-dsp and /api/save-textgrid — both take a JSON body;
+// /api/upload-wav doesn't (raw wav bytes), so it keeps its own Buffer-chunk
+// accumulation instead of using this.
+function readJsonBody(req) {
+  return new Promise((resolve, reject) => {
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', () => {
+      try { resolve(JSON.parse(body)); }
+      catch (e) { reject(e); }
+    });
+  });
+}
+
 function publicFilesPlugin() {
   return {
     name: 'public-files-api',
@@ -107,53 +121,77 @@ function publicFilesPlugin() {
         res.end(JSON.stringify({ wavs, tgs }));
       });
 
-      server.middlewares.use('/api/compute-dsp', (req, res) => {
+      server.middlewares.use('/api/compute-dsp', async (req, res) => {
         if (req.method !== 'POST') {
           res.statusCode = 405; res.end('Method Not Allowed'); return;
         }
-        let body = '';
-        req.on('data', chunk => { body += chunk; });
-        req.on('end', async () => {
-          try {
-            const { wavFile, t0, t1, colormap = 'inferno', pw = 1400, ph = 400, kind = 'both' } = JSON.parse(body);
-            const safe = path.basename(wavFile);
-            if (!/\.wav$/i.test(safe)) {
-              res.statusCode = 400; res.end('Only .wav files allowed'); return;
-            }
-            const wavPath = path.resolve(__dirname, 'public', safe);
-            const result = await runDsp({ wavFile: wavPath, t0, t1, colormap, pw, ph, kind });
-            delete result.id;
-            res.setHeader('Content-Type', 'application/json');
-            res.end(JSON.stringify(result));
-          } catch (e) {
-            console.error('[dsp_server]', e);
-            res.statusCode = 500; res.end(JSON.stringify({ error: String(e) }));
+        try {
+          const { wavFile, t0, t1, colormap = 'inferno', pw = 1400, ph = 400, kind = 'both' } = await readJsonBody(req);
+          const safe = path.basename(wavFile);
+          if (!/\.wav$/i.test(safe)) {
+            res.statusCode = 400; res.end('Only .wav files allowed'); return;
           }
-        });
+          const wavPath = path.resolve(__dirname, 'public', safe);
+          const result = await runDsp({ wavFile: wavPath, t0, t1, colormap, pw, ph, kind });
+          delete result.id;
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify(result));
+        } catch (e) {
+          console.error('[dsp_server]', e);
+          res.statusCode = 500; res.end(JSON.stringify({ error: String(e) }));
+        }
       });
 
-      server.middlewares.use('/api/save-textgrid', (req, res) => {
+      // Lets "Load Wav"/drag-and-drop load any wav from anywhere on disk and still get
+      // the enhanced Python spectrogram — dsp_server.py can only read a real file path,
+      // it has no way to see bytes the browser is holding in memory, so the frontend
+      // uploads the raw file here first (App.jsx's loadWavFile/doLoadWavFile), then
+      // treats it exactly like a public/-auto-loaded file. Body is the raw wav bytes,
+      // NOT JSON — collected as Buffer chunks (not a string) so binary data survives
+      // intact; the filename travels as a query param instead of a JSON field.
+      server.middlewares.use('/api/upload-wav', (req, res) => {
         if (req.method !== 'POST') {
           res.statusCode = 405; res.end('Method Not Allowed'); return;
         }
-        let body = '';
-        req.on('data', chunk => { body += chunk; });
+        const filename = new URL(req.url, 'http://localhost').searchParams.get('filename') || '';
+        // Safety: only allow writing .wav files inside public/ (matches the existing
+        // path.basename() pattern used by /api/save-textgrid against path traversal).
+        const safe = path.basename(filename);
+        if (!/\.wav$/i.test(safe)) {
+          res.statusCode = 400; res.end('Only .wav files allowed'); return;
+        }
+        const chunks = [];
+        req.on('data', chunk => chunks.push(chunk));
         req.on('end', () => {
           try {
-            const { filename, content } = JSON.parse(body);
-            // Safety: only allow writing .TextGrid files inside public/
-            const safe = path.basename(filename);
-            if (!/\.TextGrid$/i.test(safe)) {
-              res.statusCode = 400; res.end('Only .TextGrid files allowed'); return;
-            }
             const dest = path.resolve(__dirname, 'public', safe);
-            fs.writeFileSync(dest, content, 'utf8');
+            fs.writeFileSync(dest, Buffer.concat(chunks));
             res.setHeader('Content-Type', 'application/json');
             res.end(JSON.stringify({ ok: true, saved: safe }));
           } catch (e) {
             res.statusCode = 500; res.end(JSON.stringify({ ok: false, error: String(e) }));
           }
         });
+      });
+
+      server.middlewares.use('/api/save-textgrid', async (req, res) => {
+        if (req.method !== 'POST') {
+          res.statusCode = 405; res.end('Method Not Allowed'); return;
+        }
+        try {
+          const { filename, content } = await readJsonBody(req);
+          // Safety: only allow writing .TextGrid files inside public/
+          const safe = path.basename(filename);
+          if (!/\.TextGrid$/i.test(safe)) {
+            res.statusCode = 400; res.end('Only .TextGrid files allowed'); return;
+          }
+          const dest = path.resolve(__dirname, 'public', safe);
+          fs.writeFileSync(dest, content, 'utf8');
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify({ ok: true, saved: safe }));
+        } catch (e) {
+          res.statusCode = 500; res.end(JSON.stringify({ ok: false, error: String(e) }));
+        }
       });
 
       // Stopping the dev server shouldn't leave an orphaned dsp_server.py --serve

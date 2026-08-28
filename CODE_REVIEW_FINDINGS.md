@@ -2,14 +2,21 @@
 
 Read-only review pass (2026-07-25) looking for unnecessarily long/complicated code
 and efficiency opportunities across the frontend (`frontend-reactjs/src/App.jsx` +
-DSP/MFA backends) and the ASR pipeline (`asr/`). No code was changed as part of this
-pass — this is a punch list to work from.
+DSP/MFA backends) and the ASR pipeline (`asr/`). No code was changed as part of the
+original pass — this is a punch list to work from.
+
+**Re-verified 2026-08-25**, then again **2026-08-27** (fresh two-agent audit — one
+over `frontend-reactjs/src/`, one over `asr/` + `mfa_server.py` + `vite.config.js` —
+after a session that rewrote large parts of `asr/aligner.py` for word-level MFA
+alignment and added the group-edge-drag feature to `App.jsx`). Items confirmed fixed
+are removed from their section but keep their number as a gap, since other sections
+and "Suggested order of attack" cross-reference findings by number.
 
 Status legend: `[ ]` not started, `[x]` done. Update as items are fixed.
 
 ---
 
-## 1. Dead code (zero-risk deletes) — ✅ done 2026-07-25
+## 1. Dead code (zero-risk deletes) — ✅ done (2026-07-25, refreshed 2026-08-27)
 
 - [x] `frontend-reactjs/src/App.jsx:2963-2975` — commented-out old `commitLabel`
   (missing the `pushUndo()` call) sitting directly above the live version
@@ -28,302 +35,310 @@ Status legend: `[ ]` not started, `[x]` done. Update as items are fixed.
   `calcFormantForView`.)
 - [x] `frontend-reactjs/src/App.jsx:2264-2270` — `addHover`'s `getItems` param
   handling has a dead fallback branch (`getItems ? wordsRef.current : phonesRef.current`)
-  — every call site (2288, 2289, 2921) already passes a function, so the ternary's
-  other arm is unreachable. Simplify the signature to always expect a getter.
+  — every call site already passes a function, so the ternary's other arm is
+  unreachable. Simplified the signature to always expect a getter.
 - [x] `frontend-reactjs/src/App.jsx:2455-2456` — in the edit-mode empty-space drag
-  `onUp` handler, the `dragged === true` branch does `const s = selectionRef.current;`
-  and never uses `s`. Either a forgotten stub or leftover debugging — delete or
-  implement the intended behavior. (Deleted; the branch was a true no-op.)
-- [x] `frontend-reactjs/src/App.jsx:3375` — `errors` (filtered from `mfaQueue`) is
-  computed in the MFA-button IIFE but never referenced anywhere else. Delete.
-- [x] Leftover debug `console.log`s (contrast with `console.error` used elsewhere for
-  actual failures):
-  - `frontend-reactjs/src/App.jsx:1616, 1660, 1671, 1699` — playback start/stop/loop
-    logging in `stopPlay`/`startPlay`
-  - `frontend-reactjs/src/App.jsx:2176` — `[seek] click at t=...` fires on every
-    plain click on waveform/spectrogram canvases
-- [x] `asr/aligner.py:22-27` — unused imports: `os`, `re`, `Optional`, `Tuple`
-  (all type hints use builtin `tuple[...] | None` syntax instead).
-- [x] `asr/textgrid_writer.py:30` — unused `Optional` import.
+  `onUp` handler, the `dragged === true` branch did `const s = selectionRef.current;`
+  and never used `s`. Deleted; the branch was a true no-op.
+- [x] `frontend-reactjs/src/App.jsx:3375` — `errors` (filtered from `mfaQueue`) was
+  computed in the MFA-button IIFE but never referenced anywhere else. Deleted.
+- [x] Leftover debug `console.log`s in `stopPlay`/`startPlay` and a per-click
+  `[seek] click at t=...` log — deleted.
+- [x] `asr/aligner.py` — unused imports `os`, `re`, `Optional`, `Tuple`.
+- [x] `asr/textgrid_writer.py` — unused `Optional` import.
 
-**Build-verified** — confirmed clean with `npm run dev` (2026-07-25).
+**New dead code found and fixed 2026-08-27** (left behind by earlier work this
+session, or pre-existing and only now surfaced by the fresh audit):
+
+- [x] `frontend-reactjs/src/dsp.js` — `computeLpcCoeffs`, `lpcToFormants`,
+  `buildFormantTrack` (~70 lines). A client-side LPC formant estimator with zero
+  import sites anywhere in the repo — formants are now sourced from the Python
+  `dsp_server.py` (Praat/Burg) instead. Deleted the whole block.
+- [x] `frontend-reactjs/src/App.jsx` — `specWorkerRef` (`useRef(null)`, never
+  read/written past its own declaration; the actually-used ref is
+  `baseSpecWorkerRef`). Deleted.
+- [x] `frontend-reactjs/src/App.jsx` — `freqAxisCanvasRef` (`useRef(null)`, leftover
+  from the already-removed `drawFreqAxis` stub, never referenced again). Deleted.
+- [x] `frontend-reactjs/src/App.jsx` — `undoCount` state: written on every
+  `pushUndo`/`popUndo`/`popRedo` but its *value* never read anywhere (the Undo button
+  reads `undoStackRef.current.length` directly; `redoCount`, which *is* read, is set
+  alongside it every time so removing `undoCount` costs no re-render). Deleted the
+  declaration and its 3 write sites — done as part of the undo/redo extraction below
+  (Section 3).
+- [x] `frontend-reactjs/src/App.jsx` — `selectedTileIds` state: same shape of issue —
+  written in `syncSelectionState`/`clearSelection` but never read (tile highlighting
+  reads `selectedTilesRef.current` directly in `drawTier`); `selectedTierIds`, which
+  *is* read, is set alongside it in both places. Deleted.
+- [x] `frontend-reactjs/src/App.jsx` — in `drawTier`, a `strokeColor` "hover-edge
+  restore" assignment to `ctx.strokeStyle` after drawing the hover indicator had zero
+  visible effect (nothing else in that iteration reads `strokeStyle` afterward, and
+  the next item's iteration always overwrites it before use). Confirmed by tracing
+  the full loop body; deleted the no-op line and the now-unused `strokeColor` const.
+- [x] `asr/aligner.py` — `_align_segment`'s `words_tier` return value (2nd tuple
+  element): built every call, discarded at the one call site
+  (`phones_tier, _words_tier = _align_segment(...)`), confirmed no other references
+  anywhere. Changed `_align_segment` to return just `phones_tier`; updated the call
+  site to match.
+
+**Build-verified** 2026-07-25 and 2026-08-25. 2026-08-27's fixes were syntax-checked
+(`ast.parse`) and, for the ASR side, exercised end-to-end (`transcribe.py` run against
+a real audio file through both the default and `--word-level-mfa` paths, output
+diffed for behavior). The `App.jsx` fixes are pending the user's own `npm run dev`
+smoke test (per this repo's established practice — Claude doesn't self-verify live
+UI/browser behavior; see the "user verifies UI" project convention).
 
 ---
 
 ## 2. Real efficiency issues (highest priority — user-facing latency/perf)
 
-1. **`addTierEditInteraction` recomputes snap boundaries on every `mousemove`
-   during a drag.**
-   `frontend-reactjs/src/App.jsx:2591-2601` (edge drag), `2664-2676` (group drag,
-   plus the `getAllTiers()` call at 2669), `2749-2764` (single body drag).
-   `getCrossTierBoundaries()` → `getAllTiers()` allocates a fresh `{id, items}` array
-   per tier and `.filter().flatMap()`s over **every item in every tier**, on every
-   mousemove event. But the exclusion set (which tiers/items to exclude) is fixed for
-   the whole gesture — only the dragged tile(s) move. This is an O(total items across
-   all tiers) scan on a high-frequency event where it should be O(1)/tick.
-   **Fix**: compute `crossBounds`/`sameBounds`/`allBounds` once, right before
-   `const onMove = ...` (next to where `neighbour`/`origsByTier`/`selectedIds` are
-   already computed), and just close over the array inside `onMove`.
+*Items 1, 2, 3, 4, 5, 6, and 8 are now all fixed — see notes inline. #9/#10 remain
+open (both minor); #7 wasn't independently re-verified this pass, so don't assume
+it's still open or still fixed either way without checking.*
 
-2. ~~**`dsp_server.py` formants always decode the full file from disk.**~~ ✅ fixed
-   2026-07-25, and turned out to be bundled with a real correctness bug, not just an
-   efficiency one.
-   `frontend-reactjs/dsp_server.py:210-253`. `compute_formants()` called
-   `parselmouth.Sound(wav_path)` (whole file) then `extract_part(from_time=t0,
-   to_time=t1)` with **no padding** before running Praat's 25ms-window Burg
-   analysis. Frames within ~12.5ms of either edge didn't have a full window of
-   audio to analyze — verified directly: over a 1.0–2.0s test region, the old code
-   produced only 152 frames covering `1.0281`–`1.9719` (missing ~28ms of coverage
-   at *each* edge); after the fix, 160 frames cover `1.00313`–`1.99687`, right up
-   to the requested boundaries. Since "Generate Formants" always computes for the
-   *current view*, every formant request had this gap at both edges of whatever
-   was on screen — this, not the LPC/Burg algorithm itself, was almost certainly
-   the source of the "formant values look wrong/noisy" complaint.
-   **Fix applied**: pad the decode window by 0.1s (comfortably more than half the
-   25ms Burg window) on each side, build the `Sound` directly from
-   `_get_audio_slice()`'s array via `parselmouth.Sound(y, sampling_frequency=sr,
-   start_time=a0)` (which also fixes the full-file-decode inefficiency for free,
-   since it now reuses the same bounded/cached slice the spectrogram path uses),
-   run Burg analysis on the padded `Sound`, then discard any returned frame whose
-   time falls outside `[t0, t1]`.
+1. ~~`addTierEditInteraction` recomputes snap boundaries on every `mousemove`.~~
+   **Fixed** (2026-08-25, per HANDOFF.md "Cross-tier boundary snapping" perf note) —
+   boundary sets and per-tier item refs are now computed once per gesture, closed
+   over from inside `onMove`, for all snap modes including the newer group-edge-drag
+   path added since.
 
-   **Follow-up fix, same day**: after the above, formants still visibly "jumped"
-   between recomputes of slightly different (but overlapping) views. Root cause:
-   Praat's short-term analyses don't just anchor frames to the buffer's start
-   time — the whole frame grid is *centered* within `[xmin, xmax]`, so it depends
-   on the buffer's total duration too. Verified directly: two `Sound` objects
-   sharing the same `xmin` but differing in duration by under half a millisecond
-   got frame grids shifted by nearly half a frame-step; comparing "nearest frame"
-   values from two such differently-phased grids swung F2 by up to ~1600 Hz
-   across a 2s test file even though the underlying audio barely changed (Burg
-   per-frame estimates have no cross-frame continuity constraint, so a small
-   window-placement change can land on a materially different root/formant fit).
-   **Fix applied**: quantize *both* edges of the padded window onto a fixed
-   absolute-time grid (multiples of `FORMANT_CHUNK_SEC = 3.0`s from t=0) instead
-   of leaving them as continuous functions of the current view — any two
-   requests whose padded window rounds to the same `[a0, a1]` now hand Praat the
-   literal same `Sound` object. Verified: 0 mismatches across 315-320 shared
-   frame times between test views offset by 37ms and by half a frame-step
-   (previously 100s-of-Hz mismatches on the same cases). Tradeoff: a coarser,
-   chunk-sized decode/analysis per request instead of a tightly-fitted one —
-   acceptable since "Generate Formants" is a manual, occasional action.
+3. ~~`aligner.py` writes every segment to its own temp WAV file and rereads it.~~
+   **Fixed** (2026-08-25) — `run_mfa` now writes one shared `full_16k.wav` once, and
+   both `_align_segment` and the newer `_align_word_in_context` pass native
+   `(begin, end)` offsets into it instead of per-segment temp files.
 
-3. **`aligner.py` writes every segment to its own temp WAV file and rereads it.**
-   `asr/aligner.py:306-347`. Each segment re-slices the already-resampled
-   `full_samples` array and writes a brand-new temp WAV (`_write_wav_16k`) just so
-   `Segment(str(wav_path), 0.0, duration, 0)` can read it back. Kalpy's `Segment`
-   class natively supports `(begin, end)` offsets into a larger file (standard Kaldi
-   segment semantics) — this is exactly what it's for.
-   **Fix**: write `full_samples` to a single 16kHz temp WAV once (outside the loop),
-   then build each `Segment(str(full_wav_path), t0, t1, 0)` with the original
-   offsets. Reduces N disk writes (N = segment count) to 1.
+4. ~~OOV word matching has no caching and does redundant work.~~ **Fixed** — both
+   `asr/aligner.py`'s and `mfa_server.py`'s `_closest_dict_word` are
+   `@lru_cache(maxsize=...)`'d and capture `(word, dist)` during the single scan
+   instead of recomputing. (Still two independent, drifted implementations — see the
+   new Section 3 item on `aligner.py`/`mfa_server.py` duplication.)
 
-4. **OOV word matching has no caching and does redundant work.**
-   - `asr/aligner.py:162-169` — `_closest_dict_word` runs pure-Python O(len(a)·len(b))
-     edit distance against a length-filtered candidate set (still thousands of words)
-     for every OOV word, via `min(candidates, key=...)`, then **recomputes**
-     `_edit_distance(word, best)` a second time after `min` already found it.
-   - `mfa_server.py:108-115` — same pattern, no caching, despite the same OOV words
-     (fillers, names, typos) recurring across many segments in one session.
-   **Fix**: wrap with `@lru_cache` (vocab is fixed for the process lifetime); consider
-   `rapidfuzz.process.extractOne` (vectorized C implementation) instead of the
-   hand-rolled DP; capture `(word, dist)` during the `min` scan instead of
-   recomputing the winner's distance.
+5. ~~The formant fetch had no timeout, unlike its two siblings.~~ **Fixed** —
+   `fetchFormantData` now passes `signal: AbortSignal.timeout(SPEC_FETCH_TIMEOUT_MS)`
+   same as `fetchEnhancedSpec`/`fetchOverviewChunk`.
 
-5. **`calcFormantForView`'s fetch has no timeout**, unlike its two siblings.
-   `frontend-reactjs/src/App.jsx:1564-1573`. `fetchEnhancedSpec`/`fetchOverviewChunk`
-   both pass `signal: AbortSignal.timeout(SPEC_FETCH_TIMEOUT_MS)`; this one doesn't.
-   If the request hangs, `setFormantComputing(true)` never resolves via `finally`,
-   and the "computing formants" UI state gets stuck indefinitely.
-   **Fix**: add the same `AbortSignal.timeout(SPEC_FETCH_TIMEOUT_MS)`.
+7. ~~`specWorker.js` and `dsp.js` duplicate ~70 lines of DSP code verbatim.~~ Not
+   independently re-verified 2026-08-27 — re-check before assuming still open.
 
-6. **`drawTier`'s row-count calc spreads the whole tier into `Math.max` every draw.**
-   `frontend-reactjs/src/App.jsx:1170`: `Math.max(1, ...items.map(it => (it.row ?? 0) + 1))`.
-   For a very long recording with a dense phones tier (tens of thousands of
-   segments), spreading that many args risks `RangeError: Maximum call stack size
-   exceeded` in some engines, plus unnecessary array materialization every frame.
-   **Fix**: `let numRows = 1; for (const it of items) numRows = Math.max(numRows, (it.row ?? 0) + 1);`
+9. **Still open, minor.** The MFA button's inline IIFE derives `busy`/`queueCount`/
+   `label` from `mfaQueue` on every render. **Fix**: hoist to
+   `useMemo(() => {...}, [mfaQueue])`.
 
-7. **`specWorker.js` and `dsp.js` duplicate ~70 lines of DSP code verbatim**
-   (FFT, `hzToMel`/`melToHz`, `buildMelFilters`, colormap lerp table, STFT/mel-power
-   loop, log-normalize loop) — `frontend-reactjs/src/specWorker.js:5-71,85-108` vs
-   `frontend-reactjs/src/dsp.js:41-126`. Both are loaded as ES-module workers, so
-   there's no technical barrier to sharing. A colormap or mel-filter fix applied to
-   one will silently not apply to the other.
-   **Fix**: `export` `buildMelFilters`/`computeSpec`/`normalizeSpec` from `dsp.js`
-   (FFT/COLORMAPS already exported) and have `specWorker.js` import them.
-
-8. Minor: `hzToMelY` inside `drawSpec`'s formant-drawing loop recomputes the constant
-   `melMax = 2595 * Math.log10(1 + FMAX/700)` on every call (up to `w * 3` times per
-   draw). `frontend-reactjs/src/App.jsx:1070-1073`. Hoist above the closure.
-
-9. Minor: the MFA button's `{(() => {...})()}` IIFE filters `mfaQueue` three times
-   and derives `busy`/`queueCount`/`label` on every render.
-   `frontend-reactjs/src/App.jsx:3372-3436`. Hoist to a `useMemo(() => {...}, [mfaQueue])`.
-
-10. Minor: group-drag hot loop re-resolves the same custom-tier lookup every
-    mousemove tick even though `origsByTier`'s keys are fixed for the gesture.
-    `frontend-reactjs/src/App.jsx:2696-2698`. Resolve once before `onMove`.
+10. **Still open, minor — not independently re-verified 2026-08-27.** Group-drag hot
+    loop possibly re-resolving the same tier-ref lookup per mousemove tick. Re-check
+    current line numbers before treating this as still-accurate; item #1 above (the
+    bigger snap-boundary version of this same class of bug) is confirmed fixed, so
+    this one may already be subsumed.
 
 ---
 
 ## 3. Duplicated logic worth extracting into shared helpers
 
-- **Undo/redo snapshot+restore repeated 3x.** `frontend-reactjs/src/App.jsx:851-904`
-  — `pushUndo`, `popUndo`, `popRedo` each inline the identical snapshot object
-  construction (852-856, 869-872, 890-893) and `popUndo`/`popRedo` duplicate the
-  entire restore sequence (set refs → setWords/setPhones/setCustomTiers →
-  setUndoCount/setRedoCount → serializeTextGrid → setIsDirty) verbatim. Extract
-  `snapshotState()` and `applySnapshot(snap)`; have `popUndo`/`popRedo` differ only
-  in which stack they push/pop.
+*Re-verified 2026-08-27 with current line numbers. Three items fixed this session
+(marked below); the rest are confirmed still open. Two new duplication findings
+surfaced by the fresh audit are added at the end of this section.*
 
-- **Three DSP fetch functions share ~90 lines of fetch/error-handling boilerplate,
-  and have already drifted** (see finding #5 above — one is missing the timeout the
-  other two have). `fetchEnhancedSpec` (1391-1433), `fetchOverviewChunk` (1445-1488),
-  `calcFormantForView` (1564-1573). Extract a shared `fetchDsp({t0, t1, pw, ph, kind,
-  signal})` helper that does fetch + JSON parse + error throw; let each caller keep
-  its own cache-write/decode logic.
+- [x] **Undo/redo snapshot+restore repeated 3x.** Extracted `snapshotState()` and
+  `applySnapshot(snap)`; `pushUndo`/`popUndo`/`popRedo` now differ only in which
+  stack they push/pop and which count state they update. Also removed the dead
+  `undoCount` state as part of this (Section 1).
 
-- **`onended`'s non-loop branch reimplements `stopPlay()` inline** instead of calling
-  it. `frontend-reactjs/src/App.jsx:1710-1719` vs `1615-1622`. Replace with a direct
-  call to `stopPlay()`.
+- [x] **`textgrid_writer.py`'s `_format_words_tier`/`_format_phonemes_tier` were
+  near-identical.** Merged into one `_format_tier(intervals, total_end, tier_idx,
+  name, include_score=False)`.
 
-- **View-zoom clamp math duplicated** between `applyZoom` and the ctrl+wheel handler
-  in `addInteraction`. `frontend-reactjs/src/App.jsx:2103-2113` vs `2130-2137` — same
-  "compute new span anchored at a point, clamp to `[0, DUR]`, re-expand if clipped"
-  logic, anchored differently (`center` vs `ratio`). Extract a
-  `computeClampedView(anchorT, anchorFraction, span, DUR)` helper.
+- [x] **`transcribe.py`'s package-vs-flat-layout import fallback, copy-pasted 5x**
+  (grew from 4 to 5 since the original pass — a `reference_align` import site was
+  added alongside `--reference-txt`). Extracted `_import(pkg_path, flat_path, attr)`.
 
-- **`assignRows(withIds(x || []))` pattern repeated 3x** in `loadTextGrid` (words,
-  phones, each extra tier). `frontend-reactjs/src/App.jsx:1800-1814`. Extract a local
-  `buildItems = (items) => assignRows(withIds(items || []))`.
+- [x] **`vite.config.js`'s JSON-body-accumulation boilerplate, duplicated across
+  `/api/compute-dsp` and `/api/save-textgrid`.** Extracted
+  `readJsonBody(req) -> Promise<object>`; both handlers are now `async` and `await`
+  it. (`/api/upload-wav` correctly keeps its own separate Buffer-chunk accumulation
+  — its body is raw wav bytes, not JSON.)
 
-- **Nearest-boundary-search loop duplicated 3x** across drag modes in
-  `addTierEditInteraction`: edge drag (2596-2601, single candidate), group drag
-  (2679-2685, two candidates), single-body drag (2758-2764, two candidates). The
-  *exclusion* rules differ per mode (correctly, per HANDOFF.md) but the inner
-  "given a boundary set + 1-2 candidate positions, find the closest snap" loop is
-  identical. Extract `findNearestBoundary(candidates, bounds, threshold)` without
-  touching the surrounding boundary-collection logic.
+- [ ] **Three DSP fetch functions share ~90 lines of fetch/error-handling
+  boilerplate.** `fetchEnhancedSpec` (`App.jsx:1986-2039`), `fetchOverviewChunk`
+  (`2040-2069`), `fetchFormantData` (`2159-2193`, called by `calcFormantForView`
+  `2194-...`). The "one is missing a timeout" drift that originally motivated this
+  item is now fixed (Section 2 #5), but the boilerplate duplication itself remains.
+  Extract a shared `fetchDsp({t0, t1, pw, ph, kind, signal})` helper; let each caller
+  keep its own cache-write/decode logic.
 
-- **Loop-selection-drag boilerplate duplicated between edit/non-edit mode, and
-  already diverging.** `frontend-reactjs/src/App.jsx:2372-2398` (non-edit) vs
-  `2429-2460` (edit) — identical `onMove` bodies, near-identical `onUp` bodies;
-  non-edit calls `clearSelection()` on plain click, edit-mode doesn't (and has the
-  dead-`s` bug from section 1). Extract `startLoopSelectionDrag(rect, startClientX,
-  onPlainClick)` parameterized by the one differing callback.
+- [ ] **`onended`'s non-loop branch reimplements `stopPlay()` inline** instead of
+  calling it. Inside `startPlay`'s `src.onended` callback (`App.jsx:2329-...`) vs
+  `stopPlay`'s own body (`2240-...`). Replace with a direct call to `stopPlay()`.
 
-- **MFA transcript-building duplicated** in `processNextMfaJob` (3106-3108) and
-  `enqueueRunMfa` (3148-3149) — identical
-  `[...words].sort((a,b)=>a.t0-b.t0).map(w=>w.text.trim()).filter(Boolean).join(' ')`.
-  Extract `wordsToTranscript(words)`.
+- [ ] **View-zoom clamp math duplicated** between `applyZoom` (`App.jsx:2819-...`)
+  and the ctrl+wheel handler in `addInteraction`. Same "compute new span anchored at
+  a point, clamp to `[0, DUR]`, re-expand if clipped" logic, anchored differently
+  (`center` vs `ratio`). Extract `computeClampedView(anchorT, anchorFraction, span,
+  DUR)`.
 
-- **`ExportPopover` computes the derived filename twice** —
-  `(name.trim() || defaultName).replace(/\.TextGrid$/i, '')` at
-  `frontend-reactjs/src/App.jsx:349` and again at `359`. Compute once, reuse.
+- [ ] **`assignRows(withIds(x || []))` pattern repeated 3x** in `loadTextGrid`:
+  `App.jsx:2454` (words), `:2455` (phones), `:2470` (each extra tier). Extract a
+  local `buildItems = (items) => assignRows(withIds(items || []))`.
 
-- **Viewport-clamping logic duplicated with slightly different implementations**
-  between `IpaTooltip` (`frontend-reactjs/src/App.jsx:169-180`) and
-  `LabelEditorPopover` (`221-231`) — same "measure element, clamp against
-  `window.innerWidth`/`innerHeight` with a margin" idea, implemented two different
-  ways (this drift is exactly how future viewport-clamping bugs happen). Extract a
-  `clampToViewport(rect, size, margin)` helper.
+- [ ] **Nearest-boundary-search loop, now duplicated 4x** (grew from 3 — the new
+  group-edge-drag feature added a 4th copy): `App.jsx:3366` (group edge-drag, 1
+  candidate), `3439` (single edge-drag, 1 candidate), `3535` (group body-drag, 2
+  candidates), `3616` (single body-drag, 2 candidates). The *exclusion* rules
+  genuinely differ per mode, but the inner "given a boundary set + 1-2 candidate
+  positions, find the closest snap" loop is identical. Extract
+  `findNearestBoundary(candidates, bounds, threshold)` without touching the
+  surrounding boundary-collection logic.
 
-- **JSON-body-accumulation boilerplate duplicated** in `vite.config.js` across the
-  `/api/compute-dsp` (114-116) and `/api/save-textgrid` (139-141) handlers. Extract
-  `readJsonBody(req) -> Promise<object>`.
+- [ ] **Loop-selection-drag boilerplate duplicated between edit/non-edit mode, and
+  already diverging.** Non-edit (`App.jsx:3108-...`, calls `clearSelection()` on
+  plain click) vs edit mode (`3165-...`, no equivalent `clearSelection()` call) —
+  identical `onMove` bodies, near-identical `onUp` bodies. Extract
+  `startLoopSelectionDrag(rect, startClientX, onPlainClick)` parameterized by the one
+  differing callback.
 
-- **`textgrid_writer.py`'s `_format_words_tier`/`_format_phonemes_tier` are
-  near-identical** (`asr/textgrid_writer.py:142-176`) — same `_fill_gaps` + header +
-  `intervals [i]:`/`xmin`/`xmax`/`text` emission, differing only in the optional
-  `score` line for words. Merge into one `_format_tier(intervals, total_end,
-  tier_idx, name, include_score=False)`.
+- [ ] **MFA transcript-building duplicated** in `processNextMfaJob` (`App.jsx:3973`)
+  and its sibling (`4014`) — identical `[...words].sort((a,b)=>a.t0-b.t0)
+  .map(w=>w.text.trim()).filter(Boolean).join(' ')`. Extract `wordsToTranscript(words)`.
 
-- **`transcribe.py`'s package-vs-flat-layout import fallback copy-pasted 4x**
-  (`asr/transcribe.py:62-76, 156-158, 183-186`) — same
-  `try: from glistener.X import Y / except ImportError: from X import Y` shape for
-  `WhisperASR`, `ParakeetASR`, `run_mfa`, `write_textgrid`. Extract a small
-  `_import(pkg_path, flat_path, attr)` helper.
+- [ ] **Viewport-clamping logic duplicated with slightly different implementations**
+  between `IpaTooltip` (`App.jsx:165-181`, `offsetWidth`/`offsetHeight`, 6px margin,
+  React state) and `LabelEditorPopover` (`216-231`, `getBoundingClientRect`, 8px
+  margin, mutates `el.style` directly). Extract `clampToViewport(rect, size, margin)`.
 
-- Duplicated toast JSX for `mfaError`/`mfaWarning`
-  (`frontend-reactjs/src/App.jsx:3776-3793` and `3796-3813`) — extract a
-  `Toast({ variant, message, onDismiss, offset })` component.
+- [ ] Duplicated toast JSX for `mfaError`/`mfaWarning` (`App.jsx:4865-...` /
+  `4885-...`) — extract a `Toast({ variant, message, onDismiss, offset })` component.
 
-- Repeated inline dismiss-button styling, 3 occurrences
-  (`frontend-reactjs/src/App.jsx:3278-3281, 3787-3791, 3807-3811`) — shared class or
-  small `<DismissButton>` component.
+- [ ] Repeated inline dismiss-button styling, now **5** occurrences: `App.jsx:933`,
+  `4275`, `4479`, `4878`, `4898`. Shared class or small `<DismissButton>` component.
 
-- Duplicated nested ternary for MFA job status icon/color
-  (`frontend-reactjs/src/App.jsx:3414-3416`) — hoist a `STATUS_ICON`/`STATUS_COLOR`
-  lookup object.
+- [ ] Duplicated nested ternary for MFA job status icon/color (`App.jsx:4467-4468`)
+  — hoist a `STATUS_ICON`/`STATUS_COLOR` lookup object.
 
-- Duplicated zoom-button JSX shape, 4 occurrences (waveform y-zoom in/out, tile
-  font-size in/out) — `frontend-reactjs/src/App.jsx:3514, 3516, 3634-3635`. Small
+- [ ] Duplicated zoom-button JSX shape, 4 occurrences: waveform y-zoom in/out
+  (`App.jsx:4562`, `4564`), tile font-size in/out (`4701`, `4702`). Small
   `<GutterAdjustBtn panel dir fn label title/>` component.
+
+**New findings, 2026-08-27:**
+
+- [ ] **`aligner.py` and `mfa_server.py` have several byte-identical blocks**: the
+  ARPAbet→IPA table, `_arpa_to_ipa()`, `_edit_distance()`, and the Kalpy aligner
+  bootstrap (`AcousticModel`/`LexiconCompiler`/`KalpyAligner` construction) — `diff`
+  confirms these are literally identical text between the two files, plus
+  near-identical (drifted caching style) OOV-matching/dictionary-loading logic. Fully
+  independent copies, no shared module. Pre-existing, but today's word-level-MFA work
+  added a second call site (`_align_word_in_context`) into this already-duplicated
+  logic, widening the blast radius if the two ever drift on correctness (they've
+  already drifted on caching style). **Fix**: extract a shared `asr/mfa_common.py`
+  (ARPA table + `arpa_to_ipa` + `edit_distance` + `load_dict_words` +
+  `closest_dict_word` + the Kalpy bootstrap, parameterized the same way
+  `aligner.py`'s more-general per-dictionary version already is) and have both files
+  import from it. Each process (the batch CLI and the Flask server) gets its own
+  independent module-level singleton cache on import, so this is safe across the
+  two separate processes. **Bigger lift than the rest of this section — touches the
+  live `mfa_server.py` used by the in-browser MFA re-align button, so budget time to
+  test that button after.**
+
+- [ ] **"Resolve a tier's items/ref by tierId" ternary duplicated 5x**, one more
+  variant than the nearest-boundary-search item above covers: `App.jsx:2773`
+  (Backspace/Delete handler), `3300` (group edge-drag, resolving `.current` arrays),
+  `3348` (group edge-drag, resolving refs into `tierRefs`), `3483` (group body-drag,
+  `.current` arrays), `3517` (group body-drag, refs). All the same
+  `tierId === 'words' ? wordsRef... : tierId === 'phones' ? phonesRef... :
+  customTiersRef.current.find(...)?.items ?? []` shape. Extract a single
+  `getTierRef(tierId)` / `getTierItems(tierId)` helper used by all 5 call sites —
+  would also directly shrink the next item below.
+
+- [ ] **Group edge-drag vs. group body-drag bounds/tierRefs setup blocks are
+  near-verbatim.** `App.jsx:3336-3350`ish (group edge-drag: `draggedTierIds`,
+  `tiers = getAllTiers()`, `crossBounds`/`sameBounds`/`allBounds`, `tierRefs` Map
+  loop) vs `3505-3519`ish (group body-drag, the pre-existing block this was copied
+  from) — same 5 statements, same `tierRefs` Map construction, differing only in the
+  per-item exclusion set (`flankerIds` vs `selectedIds`). Extract a
+  `computeGroupBounds(draggedTierIds, excludeIds)` helper returning
+  `{ allBounds, tierRefs }`, shared by both blocks — pairs naturally with the
+  `getTierRef` extraction above.
 
 ---
 
 ## 4. Structurally long/complex (worth decomposing)
 
-- **`addTierEditInteraction` is ~600 lines**
-  (`frontend-reactjs/src/App.jsx:2320-2934`) — handles hover, mousedown
-  (seek/select/drag-start/context-menu-guard), edge-drag, body-drag (single +
-  group), cross-tier snapping, drag-to-create loop-selection, and the context menu
-  (rename/merge/delete), all in one function. The three snap-exclusion rules are
-  genuinely different per HANDOFF.md and shouldn't be merged, but the boundary
-  precompute (section 2, #1) and the nearest-boundary search (section 3) are safe,
-  concrete extraction targets that would shrink this meaningfully without losing any
-  of the documented behavioral nuance.
+*Re-verified 2026-08-27. One item (the dead overlap-detection loop) is now fixed;
+`addTierEditInteraction` has grown substantially (548 → 683 lines) since the group
+edge-drag feature was added, making its decomposition more valuable, not less.*
 
-- **`processNextMfaJob` mixes several concerns** in one ~60-line function
-  (`frontend-reactjs/src/App.jsx:3085-3145`): sample-range extraction,
-  transcript-building, a server health-check (fetch + timeout), worker lifecycle
-  (spawn/postMessage/terminate via Promise wrapper), result merging, and
-  queue/error bookkeeping. Extract `checkMfaServerHealth()` and
-  `runMfaWorker({ch, sr, t0, t1, words})` as separate helpers so
-  `processNextMfaJob` reads as a short orchestration sequence.
+- **`addTierEditInteraction` is now `App.jsx:3056-3738` (683 lines, up from 548)** —
+  handles hover, mousedown (seek/select/drag-start/context-menu-guard branching),
+  edge-drag (single-tile *and* the newer group/flanking variant), body-drag (single +
+  group), cross-tier snapping (4 call sites now, see Section 3), drag-to-create
+  loop-selection, and the context menu (rename/merge/delete). The snap-exclusion
+  rules genuinely differ per mode and shouldn't be merged, but the boundary precompute
+  (Section 2 #1, already done) and the nearest-boundary search + tier-ref resolution
+  (Section 3, still open) are safe, concrete extraction targets that would shrink this
+  meaningfully without losing any documented behavioral nuance. Higher-value to do
+  this than it was at the original review, precisely because the function kept
+  growing in the meantime.
 
-- **`applyMfaResult` has a no-op overlap-detection loop.**
-  `frontend-reactjs/src/App.jsx:3046-3059` — an O(n×m) pass checks every `newPhones`
-  item against every `kept` item for overlap and only `console.warn`s on a hit; the
-  actual trimming that follows (3062-3066) is based purely on segment boundaries and
-  doesn't use this loop's result. It reads as load-bearing merge logic but isn't —
-  either drop it or fold the warning into the real trim step.
+- **`processNextMfaJob` still mixes several concerns** in one ~60-line function
+  (`App.jsx:3951-4010`): sample-range extraction, transcript-building, a server
+  health-check (fetch + timeout), worker lifecycle (spawn/postMessage/terminate via
+  Promise wrapper), result merging via `applyMfaResult`, and queue/error bookkeeping.
+  Extract `checkMfaServerHealth()` and `runMfaWorker({ch, sr, t0, t1, words})` as
+  separate helpers so `processNextMfaJob` reads as a short orchestration sequence.
 
-- **Note / correction**: `loadPublicPair` was initially suspected to be a ~230-line
-  problem function based on its start/end line numbers, but on inspection it's only
-  23 lines (`frontend-reactjs/src/App.jsx:1864-1886`) and delegates cleanly to
-  `loadAudio`/`loadTextGrid` without redundant work. Not an issue — no action needed.
+- [x] ~~`applyMfaResult` had a no-op overlap-detection loop.~~ **Fixed** — the
+  O(n×m) pass that only `console.warn`ed on overlap (its result was never used by the
+  actual trim step, which is purely boundary-based) has been deleted; the real
+  trimming behavior is unchanged.
+
+- **Note / correction** (unchanged from original pass): `loadPublicPair` was
+  initially suspected to be a ~230-line problem function based on its start/end line
+  numbers, but on inspection it's only 23 lines and delegates cleanly to
+  `loadAudio`/`loadTextGrid` without redundant work. Not an issue.
 
 ---
 
 ## 5. Lower-priority / optional
 
-- `frontend-reactjs/src/App.jsx:1193-1200` — `drawTier`'s parallel fill/stroke
-  ternary chains repeat the same `isSelected/isEdited/hasScore` condition ladder
-  twice; could collapse into one lookup returning `{fill, stroke}`. Current form is
-  still readable, low priority.
-- `frontend-reactjs/src/App.jsx:689` — `MFA_SERVER = 'http://localhost:5050'` is
-  declared inside `App()` (reallocated every render) despite never depending on
-  props/state. Hoist to module scope.
-- `frontend-reactjs/src/App.jsx:279-289` — `assignRows` mutates item objects in
-  place (`item.row = r` on shared references) rather than returning fresh copies
-  like its sibling `withIds`. Inconsistent purity; low risk today since call sites
-  already spread arrays, but a latent footgun if any caller ever holds onto a
-  pre-`assignRows` reference. Consider `sorted.map(it => ({ ...it, row }))`.
-- `frontend-reactjs/src/App.jsx:3611-3621` — tier-visibility bar rebuilds an array
-  of checkbox descriptors (with fresh closures) every render. Low impact at typical
-  tier counts; memoize with `useMemo` only if this becomes a hot path.
+*Not independently re-verified 2026-08-27 — re-check line numbers before acting.*
+
+- `MFA_SERVER = 'http://localhost:5050'` declared inside `App()` (reallocated every
+  render) despite never depending on props/state. Hoist to module scope.
+- `assignRows` mutates item objects in place (`item.row = r`, on shared references)
+  rather than returning fresh copies like its sibling `withIds` (which spreads).
+  Inconsistent purity; low risk today since call sites already spread arrays, but a
+  latent footgun if any caller ever holds onto a pre-`assignRows` reference. Consider
+  `sorted.map(it => ({ ...it, row }))`.
+- Tier-visibility bar rebuilds an array of checkbox descriptors (with fresh closures)
+  every render. Low impact at typical tier counts; memoize with `useMemo` only if
+  this becomes a hot path.
+
+---
+
+## Observed, out of scope: MFA alignment is not run-to-run deterministic
+
+While verifying the `textgrid_writer.py` merge (2026-08-27) by diffing regenerated
+output against a prior run, two back-to-back runs of the *identical* code against
+the *identical* input (same JSON, same audio, default segment-level alignment)
+produced different phone counts (6049 vs 6048) and different timestamps/phone
+identities in places. This is inherent to the underlying Kalpy/Kaldi alignment step
+itself (most likely floating-point summation-order nondeterminism from multi-threaded
+feature computation occasionally flipping a near-tie Viterbi decision) — confirmed
+unrelated to any code in this repo, since it reproduces with zero changes between
+runs. Not a dead-code/duplication finding, just worth recording: don't treat a diff
+between two MFA runs as proof of a regression without also checking whether two runs
+of the *same* code diff from each other.
 
 ---
 
 ## Suggested order of attack
 
-1. Section 1 (dead code) — trivial, no behavior change, do all of it in one pass.
-2. Section 2 items #1–#4 (drag-snap recompute, formants full-file decode, aligner
-   per-segment WAV writes, OOV caching) — real user-facing latency wins.
-3. Section 3 — consolidate duplicated logic, starting with undo/redo and the DSP
-   fetchers (both also fix a latent correctness gap: #5's missing timeout).
+1. Section 1 (dead code) — done, including the 2026-08-27 additions.
+2. Section 2 — done except #9/#10 (both minor, optional).
+3. Section 3 — 4 of ~19 items done 2026-08-27 (undo/redo, textgrid_writer tiers,
+   transcribe.py imports, vite.config.js body-reading). Next up: the `getTierRef` +
+   `computeGroupBounds` + `findNearestBoundary` trio (all touch the same drag code,
+   good to do together with live testing after), then the `aligner.py`/
+   `mfa_server.py` consolidation (bigger, touches the live MFA server — test the
+   in-browser re-align button afterward), then the smaller single-file items
+   opportunistically.
 4. Section 4 — decompose `addTierEditInteraction` and `processNextMfaJob` using the
-   helpers extracted in step 3.
+   helpers extracted in step 3. `applyMfaResult`'s dead loop is already gone.
 5. Section 5 — optional polish, pick up opportunistically.

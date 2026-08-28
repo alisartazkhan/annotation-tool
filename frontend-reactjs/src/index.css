@@ -1,37 +1,39 @@
 :root {
-  --bg:        #0f0f11;
-  --bg-panel:  #13131a;
-  --bg-ui:     #18181c;
-  --bg-item:   #232328;
-  --border:    #1e1e24;
-  --border-ui: #2e2e36;
-  --border-ui2:#2a2a30;
-  --text:      #e8e6e1;
-  --text-dim:  #c8c6c1;
-  --text-mute: #6b6a65;
-  --text-dark: #45454d;
+  --bg:        #090c10;
+  --bg-panel:  #0f1318;
+  --bg-ui:     #14171c;
+  --bg-item:   #222832;
+  --border:    #252b34;
+  --border-ui: #303742;
+  --border-ui2:#2a3039;
+  --text:      #f0f2f4;
+  --text-dim:  #c9ced6;
+  --text-mute: #858b95;
+  --text-dark: #5f6672;
   --accent:    #3a7bd5;
   --mono:      "JetBrains Mono", monospace;
-  --toolbar-btn-h: 28px;
+  --toolbar-btn-h: 32px;
 
   /* Chrome-only theme tokens. The waveform/spectrogram/tier canvas area is drawn with its own
      hardcoded colors in App.jsx's draw* functions and is intentionally NOT theme-aware — these
      tokens only cover toolbar/panel/popover/modal/toast DOM chrome. See HANDOFF.md "Theming". */
-  --btn-bg: #2f2f37;
-  --btn-border: #3d3d48;
-  --btn-bg-hover: #3d3d48;
-  --btn-border-hover: #55556a;
+  --btn-bg: #202630;
+  --btn-border: #353d4a;
+  --btn-bg-hover: #222a35;
+  --btn-border-hover: #4b5868;
+  --play-bg: #ececea; /* near-white in dark mode (light circle, dark icon) — flips to accent blue with a white icon in light mode */
+  --play-fg: #14141a;
   --accent-hover: #4a8be5;
   --accent-soft: #7aacf0;
   --accent-strong: #c8deff;
   --accent-rgb: 58, 123, 213;
 
-  --bg-surface: #1e1e26;
-  --border-surface: #2e2e3a;
-  --bg-deep: #0c0c0f;
-  --bg-tooltip: #1a1a24;
-  --border-tooltip: #3a3a4a;
-  --text-soft: #9a9890;
+  --bg-surface: #141920;
+  --border-surface: #303744;
+  --bg-deep: #070a0e;
+  --bg-tooltip: #171d25;
+  --border-tooltip: #3a4452;
+  --text-soft: #a2a8b2;
   --shadow-color: rgba(0,0,0,0.55);
   --backdrop: rgba(15,15,17,0.85);
 
@@ -40,8 +42,6 @@
   --kbd-text: #7a8aaa;
 
   --card-bg: rgba(20,20,28,0.82);
-  --card-icon: #555;
-  --card-icon-hover: #999;
   --card-label: #888;
   --card-select-text: #c0c0cc;
 
@@ -65,6 +65,11 @@
   --save-error: #f07070;
   --save-error-bg: rgba(220,80,80,0.15);
 
+  /* Used by .btn-mfa/.btn-export OUTSIDE the toolbar (MFA word-picker modal's "Align
+     all", ExportPopover's "Download") as a colored primary-action accent — the toolbar's
+     own MFA/Export buttons are flat (see ".toolbar .btn" below); .toolbar .btn's higher
+     selector specificity overrides these for that one context without needing a second,
+     toolbar-scoped copy of these rules. */
   --mfa-bg: #1e2e1e;
   --mfa-text: #7fcf7f;
   --mfa-rgb: 80, 180, 80;
@@ -77,33 +82,29 @@
   --export-border: #2e8b4f;
   --export-bg-hover: #2e8b4f;
   --export-border-hover: #38a85f;
-
-  --tier-bg: #243a52;
-  --tier-border: #355a82;
-  --tier-text: #dce8f5;
-  --tier-bg-hover: #355a82;
-  --tier-border-hover: #4a7ab0;
 }
 
 /* ── Light theme overrides — chrome only, canvas draw functions are unaffected ── */
 :root[data-theme="light"] {
-  --bg:        #f2f2f4;
+  --bg:        #f5f6f8;
   --bg-panel:  #ffffff;
   --bg-ui:     #ffffff;
   --bg-item:   #eceff2;
-  --border:    #e3e3e7;
-  --border-ui: #d6d6db;
-  --border-ui2:#dcdce2;
+  --border:    #dfe3e8;
+  --border-ui: #d0d6df;
+  --border-ui2:#d9dee6;
   --text:      #1c1c20;
   --text-dim:  #3c3c42;
-  --text-mute: #767479;
-  --text-dark: #9a9aa2;
+  --text-mute: #717782;
+  --text-dark: #9aa1ad;
   --accent:    #2f68c4;
 
   --btn-bg: #e9e9ed;
   --btn-border: #d0d0d6;
   --btn-bg-hover: #dcdce2;
   --btn-border-hover: #b8b8c2;
+  --play-bg: var(--accent); /* blue in light mode — gray in dark mode, per user request */
+  --play-fg: #ffffff;
   --accent-hover: #5a95e8;
   --accent-soft: #3a72c9;
   --accent-strong: #1c4a99;
@@ -123,8 +124,6 @@
   --kbd-text: #4a5a78;
 
   --card-bg: rgba(255,255,255,0.88);
-  --card-icon: #767479;
-  --card-icon-hover: #45454d;
   --card-label: #63636a;
   --card-select-text: #2a2a30;
 
@@ -160,12 +159,6 @@
   --export-border: #278049;
   --export-bg-hover: #379c5c;
   --export-border-hover: #2f8b52;
-
-  --tier-bg: #e3edf7;
-  --tier-border: #a9c8e8;
-  --tier-text: #1f4269;
-  --tier-bg-hover: #d2e2f2;
-  --tier-border-hover: #7fa9d6;
 }
 
 *, *::before, *::after { box-sizing: border-box; }
@@ -192,15 +185,28 @@ html, body {
   */
 /* wrap to another row */
 .toolbar {
-  min-height: 54px; height: auto; flex-shrink: 0;
-  display: flex; align-items: center; gap: 12px; padding: 6px 16px;
-  background: var(--bg-ui); border-bottom: 1px solid var(--border-ui2);
+  min-height: 64px; height: auto; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 10px 14px; padding: 10px 24px;
+  background: var(--bg-ui);
+  border-bottom: 1px solid var(--border-ui2);
+  box-shadow: 0 1px 0 rgba(255,255,255,0.03) inset;
   flex-wrap: wrap;
 }
+.toolbar-group { display: flex; align-items: center; gap: 10px; flex-wrap: nowrap; }
+/* Flatten the three structural groups into one responsive flex row. Composite controls
+   that need their own positioning wrapper (logo/status, MFA, Export, More) stay atomic;
+   Undo/Redo, transport, and zoom remain compact functional clusters. */
+.toolbar > .toolbar-group { display: contents; }
+.toolbar-group--right > .toolbar-group { display: contents; }
+
+/* Undo/Redo sit tighter together than the rest of the toolbar's 10px group gap, since
+   they're functionally a pair — separated from the rest of the left group by the wider
+   gap above instead of a .toolbar-divider. */
+.undo-redo-group { display: flex; align-items: center; gap: 2px; }
 
 .toolbar > * { flex-shrink: 0; }
 .toolbar .btn,
-.toolbar .load-btn,
 .toolbar .btn-edit-split,
 .toolbar .btn-edit-split__main,
 .toolbar .btn-edit-split__badge {
@@ -222,29 +228,40 @@ html, body {
 .toolbar > * { flex-shrink: 0; }
   */
 
-.logo { font-weight: 600; font-size: 13px; color: var(--text); letter-spacing: -0.3px; display: flex; align-items: center; gap: 0; }
-.logo span { color: var(--text-mute); font-weight: 400; font-size: 12px; margin-left: 6px; }
+.logo { position: relative; font-weight: 700; font-size: 13px; color: var(--text); display: flex; align-items: center; gap: 0; }
 .logo-btn {
   background: none; border: none; padding: 0; margin: 0;
-  font-family: inherit; font-weight: 600; font-size: 18px; color: var(--text);
-  letter-spacing: -0.3px; cursor: pointer; line-height: 1;
+  font-family: inherit; font-weight: 700; font-size: 22px; color: var(--text);
+  cursor: pointer; line-height: 1;
 }
 .logo-btn:hover { color: var(--accent-soft); }
+.lock-indicator {
+  display: inline-flex; align-items: center; justify-content: center;
+  margin-left: 10px; padding: 3px; border: none; border-radius: 4px;
+  background: none; color: var(--text-dim); cursor: pointer; line-height: 0;
+  transition: background 100ms, color 100ms;
+}
+.lock-indicator:hover { color: var(--accent-soft); background: rgba(var(--accent-rgb), 0.12); }
 .save-indicator {
-  margin-left: 10px; font-size: 11px; font-weight: 500;
+  margin-left: 18px; font-size: 12px; font-weight: 500;
   font-family: var(--mono); padding: 2px 7px; border-radius: 4px;
   animation: save-fadein 80ms ease;
 }
+/* Plain colored text, no pill — matches the flat toolbar look (2026-08-17, per user
+   feedback that the amber background/border/glow was too loud). The other three
+   save-state variants below keep their pill treatment; only "Unsaved" changed. A fixed
+   vivid orange (not the muted --save-unsaved token) per the reference image/user
+   request — same literal value in both themes since it needs to read as "orange", not
+   a theme-tinted amber. */
 .save-indicator--unsaved {
-  color: #1a1a1a; background: #ffc93c; font-weight: 700;
-  border: 1px solid #ffdf7a; box-shadow: 0 0 8px rgba(255,201,60,0.5);
+  color: #ff9500; background: none; border: none; box-shadow: none;
+  padding: 0; font-weight: 500;
 }
 .save-indicator--saving  { color: var(--accent-soft); background: rgba(var(--accent-rgb),0.15); }
 .save-indicator--saved   { color: var(--save-saved); background: var(--save-saved-bg); }
 .save-indicator--error   { color: var(--save-error); background: var(--save-error-bg); }
 @keyframes save-fadein { from { opacity: 0; } to { opacity: 1; } }
-.spacer { flex: 1; }
-.transport { display: flex; align-items: center; gap: 6px; }
+.transport { display: flex; align-items: center; gap: 7px; }
 /*
 .btn {
   padding: 5px 12px; border-radius: 6px; border: 1px solid var(--border-ui);
@@ -260,41 +277,41 @@ html, body {
 
 .btn:hover { background: var(--border-ui); color: var(--text); border-color: var(--btn-border-hover); }
 .btn.active { background: var(--text); color: var(--bg); border-color: var(--text); }
-.btn-play { background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 500; }
-.btn-play:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
-.btn-play.paused { background: var(--bg-item); color: var(--text-dim); border-color: var(--border-ui); }
 .time-display {
-  font-family: var(--mono); font-size: 12px; color: var(--text-mute);
-  min-width: 110px; text-align: right; padding-right: 4px;
+  font-family: var(--mono); font-size: 14px; color: var(--text-dim);
+  min-width: 150px; text-align: center; padding: 0 8px;
 }
-/* .load-btn shares base appearance with .btn; only color differs */
-/*
-.load-btn {
-  padding: 5px 12px; border-radius: 6px; border: 1px solid var(--border-ui);
-  background: var(--bg-item); color: var(--text-mute); font-size: 12px; font-family: inherit;
-  cursor: pointer; transition: background 100ms;
-}
-.load-btn:hover { background: var(--border-ui); color: var(--text-dim); }
-*/
-.load-btn {
-  padding: 8px 15px; border-radius: 7px; border: 1px solid var(--btn-border);
-  background: var(--btn-bg); color: var(--text); font-size: 13.5px; font-weight: 500; font-family: inherit;
-  cursor: pointer; transition: background 100ms;
-}
-.load-btn:hover { background: var(--btn-bg-hover); color: var(--text); }
-.load-btn input { display: none; }
-
 /* ── Toolbar buttons: normalize every button/control in the main toolbar to one height ── */
 .toolbar .btn,
-.toolbar .load-btn,
 .toolbar .colormap-select {
   height: var(--toolbar-btn-h);
 }
-.toolbar .btn,
-.toolbar .load-btn {
+/* Flat toolbar chrome (2026-08-17 toolbar cleanup, per user request: "fewer pills, less
+   color"): no visible background/border by default, just a hover/active tint — overrides
+   the base .btn pill look (which non-toolbar buttons like popover/modal buttons still
+   use) specifically inside .toolbar. Higher specificity than bare .btn-play/.btn-mfa/
+   .btn-export (which is why those are now written as .toolbar .btn-play etc. below,
+   not bare — otherwise this rule would silently win and flatten them too). */
+.toolbar .btn {
   display: flex; align-items: center; justify-content: center;
-  padding: 0 10px; white-space: nowrap;
+  padding: 0 9px; white-space: nowrap;
+  background: transparent; border: 1px solid transparent; border-radius: 7px;
+  color: var(--text-dim); font-size: 14px; font-weight: 500;
 }
+.toolbar .btn:hover { background: var(--btn-bg-hover); border-color: transparent; color: var(--text); }
+.toolbar .btn.active { background: var(--btn-bg-hover); border-color: transparent; color: var(--text); }
+.toolbar .btn:disabled { opacity: 0.4; pointer-events: none; }
+
+/* Play stays the one filled/colored control — a circle, near-white in dark mode and
+   accent blue in light mode (--play-bg/--play-fg), so it still reads as the primary
+   action; sized a couple px larger than the other toolbar controls since it's the one
+   deliberately-prominent button. */
+.toolbar .btn-play {
+  width: 40px; height: 40px; padding: 0; border-radius: 50%;
+  background: var(--play-bg); color: var(--play-fg); font-weight: 500; font-size: 15px;
+}
+.toolbar .btn-play:hover { background: var(--play-bg); color: var(--play-fg); filter: brightness(1.08); }
+.toolbar .btn-play.paused { background: var(--btn-bg-hover); color: var(--text-dim); }
 
 /* .btn-label uses margin, not a leading space in its text content, for the gap after
    the icon — `.toolbar .btn` is `display: flex`, which makes the icon and this span
@@ -302,18 +319,31 @@ html, body {
    whitespace-collapsing since it sits at the start of the span's own box. */
 .toolbar .btn-label { margin-left: 5px; }
 
-/* Below this width, collapse Loop/Scores/Export to icon-only to buy back room before
-   the toolbar has to wrap to a second row. Threshold is an estimate — retune by
-   resizing the window and watching where wrapping actually kicks in. */
+/* Below this width, collapse Export to icon-only to buy back room before the toolbar
+   has to wrap to a second row (2026-08-17 toolbar cleanup: Loop/+Tier/Load/theme moved
+   into the "More" overflow menu, and Scores/MFA dropped their icons and .btn-label
+   wrapper entirely, so Export is the only remaining user of this rule). Threshold is an
+   estimate — retune by resizing the window and watching where wrapping actually kicks in. */
 @media (max-width: 1100px) {
   .toolbar .btn-label { display: none; }
 }
-.toolbar .colormap-select {
-  padding: 0 8px;
+@media (max-width: 1350px) {
+  .toolbar { gap: 14px; padding-inline: 18px; }
+  .toolbar-group { gap: 8px; }
+  .time-display { min-width: 132px; padding-inline: 4px; }
+  input[type="range"] { width: 84px; }
 }
+.toolbar .colormap-select {
+  padding: 0 8px 0 10px;
+  background: rgba(255,255,255,0.03); border-color: var(--border-ui2); color: var(--text-dim);
+  font-size: 14px; border-radius: 7px;
+}
+.toolbar .colormap-select:hover { background: var(--btn-bg-hover); border-color: transparent; color: var(--text); }
 .toolbar .btn-undo-redo {
-  font-size: 20px;
-  padding: 0 10px;
+  font-size: 21px;
+  padding: 0 9px;
+  -webkit-text-stroke: 0.6px currentColor;
+  transform: scaleY(-1); /* flips the ↩/↪ glyph's hook to curve upward instead of down, per user request */
 }
 
 /* ── Timeline ── */
@@ -321,78 +351,161 @@ html, body {
   flex: 1; min-height: 0;
   display: flex; flex-direction: column; position: relative;
   overflow: hidden;
+  background: var(--bg-deep);
 }
 
 /* ── Timeline inner body (everything except minimap) ── */
 .timeline-body {
   flex: 1; min-height: 0;
   display: flex; flex-direction: column; overflow: hidden;
+  background: var(--bg);
 }
 
 /* ── Panels (waveform + spectrogram) ── */
 .panels {
-  flex: 0.82; min-height: 60px;
+  flex: 0.60; min-height: 220px;
   display: flex; flex-direction: column;
-  border-bottom: 1px solid var(--border);
+  background: var(--bg-panel);
 }
 .panel {
   flex: 1; min-height: 0; display: flex;
-  border-bottom: 1px solid var(--border);
+  background: var(--bg-panel);
 }
-.panel:last-child { border-bottom: none; }
 
 /* ── Shared row divider (panel-divider and tier-divider are identical) ── */
 .panel-divider, .tier-divider {
-  height: 5px; flex-shrink: 0; cursor: row-resize;
-  background: var(--border); transition: background 100ms;
+  height: 4px; flex-shrink: 0; cursor: row-resize;
+  background: transparent; transition: background 100ms;
 }
 .panel-divider:hover, .panel-divider:active,
-.tier-divider:hover,  .tier-divider:active { background: var(--accent); }
+.tier-divider:hover,  .tier-divider:active { background: rgba(var(--accent-rgb),0.28); }
 
 /* ── Shared gutter (panel-gutter and tier-gutter share base layout) ── */
 .panel-gutter, .tier-gutter {
-  width: 56px; flex-shrink: 0;
+  width: 112px; flex-shrink: 0;
   display: flex; align-items: center; justify-content: center;
+  position: relative;
   background: var(--bg-panel); border-right: 1px solid var(--border);
-  font-size: 9px; font-family: var(--mono);
-  color: var(--text-dark); letter-spacing: 1px;
+  font-size: 12px; font-family: Inter, system-ui, sans-serif;
+  color: var(--text-dim);
 }
-.tier-gutter { flex-direction: column; gap: 3px; }
+.tier-gutter { flex-direction: column; gap: 4px; align-items: flex-start; padding-left: 16px; }
+.gutter-label {
+  font-size: 13px; font-weight: 700; line-height: 1;
+  letter-spacing: 0.02em; color: var(--text);
+}
+.gutter-subtitle {
+  font-size: 11px; font-weight: 500; line-height: 1.1;
+  color: var(--text-mute); letter-spacing: 0;
+}
+.gutter-more-btn {
+  position: absolute; top: 4px; right: 4px;
+  background: transparent; border: none; border-radius: 4px;
+  color: var(--text-dark); cursor: pointer;
+  font-size: 13px; line-height: 1; padding: 2px 4px;
+}
+.gutter-more-btn:hover { color: var(--text); background: var(--btn-bg-hover); }
+.gutter-more-btn--active { color: var(--accent-strong); }
 
 /* ── Waveform y-zoom +/- (panel-gutter modifier, wave panel only) ── */
-.panel-gutter--wave { flex-direction: column; justify-content: space-between; padding: 4px 0; }
-.panel-gutter-btn {
-  background: none; border: none; color: var(--text-dark); cursor: pointer;
-  font-size: 13px; line-height: 1; padding: 2px 6px;
+.panel-gutter--wave { align-items: stretch; justify-content: flex-start; }
+.panel-gutter--axis { justify-content: flex-start; }
+.panel-gutter__identity {
+  width: 48px; height: 100%; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: flex-start;
+  padding-left: 16px;
 }
-.panel-gutter-btn:hover { color: var(--accent); }
+.panel-gutter__identity--controls {
+  flex-direction: column; align-items: flex-start; justify-content: space-between;
+  padding: 8px 0 8px 16px;
+}
+.axis-labels {
+  position: absolute; inset: 0 8px 0 52px;
+  pointer-events: none;
+  font: 10px/1 var(--mono); color: var(--text-mute);
+}
+.axis-label {
+  position: absolute; top: clamp(10px, var(--axis-position), calc(100% - 10px)); right: 0;
+  transform: translateY(-50%); white-space: nowrap;
+}
+.panel-gutter-btn {
+  background: transparent; border: 1px solid transparent; border-radius: 5px;
+  color: var(--text-dark); cursor: pointer;
+  font-size: 14px; line-height: 1; padding: 3px 7px;
+}
+.panel-gutter-btn:hover { color: var(--text); background: var(--btn-bg-hover); }
 
 .panel-body {
   flex: 1; min-width: 0; position: relative; overflow: hidden;
 }
-.panel-tag {
-  position: absolute; top: 4px; left: 6px;
-  font-size: 9px; font-family: var(--mono);
-  color: var(--text-dark); letter-spacing: .5px; pointer-events: none; z-index: 1;
-}
 .panel-body canvas { width: 100%; height: 100%; display: block; }
+
+/* ── Direct spectrogram track toggles ── */
+.spec-track-toggles {
+  position: absolute; top: 8px; right: 12px; z-index: 2;
+  display: flex; align-items: center; gap: 9px;
+  padding: 5px 8px;
+  border: 1px solid rgba(255,255,255,0.16); border-radius: 6px;
+  background: rgba(8,12,16,0.78);
+  box-shadow: 0 3px 12px rgba(0,0,0,0.22);
+  backdrop-filter: blur(7px);
+  -webkit-backdrop-filter: blur(7px);
+}
+.spec-track-toggle {
+  display: inline-flex; align-items: center; gap: 4px;
+  color: rgba(255,255,255,0.68);
+  font: 10px/1 var(--mono); cursor: pointer; user-select: none;
+}
+.spec-track-check {
+  appearance: none; -webkit-appearance: none;
+  width: 13px; height: 13px; margin: 0; flex-shrink: 0;
+  position: relative; cursor: pointer;
+  border: 1px solid rgba(255,255,255,0.42); border-radius: 3px;
+  background: rgba(0,0,0,0.18);
+}
+.spec-track-check:checked { border-color: var(--track-color); }
+.spec-track-check:checked::after {
+  content: ''; position: absolute; left: 3px; top: 1px;
+  width: 4px; height: 7px;
+  border: 1.5px solid var(--track-color); border-top: 0; border-left: 0;
+  transform: rotate(45deg);
+}
+.spec-track-check:checked + span { color: var(--track-color); }
+.spec-track-check:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+
+/* ── Live frequency crosshair ── */
+.spec-crosshair-line {
+  position: absolute; left: 0; right: 0; height: 0; margin-top: -0.5px;
+  border-top: 1px dashed rgba(255,255,255,0.45);
+  pointer-events: none; z-index: 2;
+}
+.spec-crosshair-label {
+  position: absolute; left: 8px; transform: translateY(-50%);
+  background: rgba(8,12,16,0.82); color: #fff;
+  font: 10px/1 var(--mono); padding: 3px 6px; border-radius: 4px;
+  border: 1px solid rgba(255,255,255,0.18);
+  pointer-events: none; z-index: 2; white-space: nowrap;
+}
 
 /* ── Ruler ── */
 .ruler {
-  height: 22px; flex-shrink: 0;
-  display: flex; border-bottom: 1px solid var(--border);
+  height: 32px; flex-shrink: 0;
+  display: flex;
+  background: var(--bg-panel);
 }
 .ruler-gutter {
-  width: 56px; flex-shrink: 0;
+  width: 112px; flex-shrink: 0;
   background: var(--bg-panel); border-right: 1px solid var(--border);
 }
 .ruler canvas { flex: 1; min-width: 0; display: block; }
 
 /* ── Tiers ── */
-.tiers { flex: 0.18; min-height: 40px; display: flex; flex-direction: column; overflow: hidden; }
+/* A small whitespace break separates the signal block from annotation tiers. */
+.tiers { flex: 0.40; min-height: 220px; margin-top: 8px; display: flex; flex-direction: column; overflow: hidden; background: var(--bg-panel); }
 .tier {
-  flex: 1; min-height: 20px; display: flex;
-  border-bottom: 1px solid var(--border); overflow: hidden;
+  flex: 1; min-height: 56px; display: flex;
+  overflow: hidden;
+  background: var(--bg-panel);
 }
 .tier canvas { flex: 1; min-width: 0; display: block; }
 
@@ -404,25 +517,23 @@ html, body {
 
 /* ── Minimap ── */
 .minimap {
-  height: 28px; flex-shrink: 0;
+  height: 40px; flex-shrink: 0;
   display: flex; background: var(--bg-deep);
   border-top: 1px solid var(--border);
 }
 .minimap-gutter {
-  width: 56px; flex-shrink: 0;
+  width: 112px; flex-shrink: 0;
   background: var(--bg-panel); border-right: 1px solid var(--border);
 }
 .minimap canvas { flex: 1; min-width: 0; display: block; cursor: pointer; }
 
 /* ── Scrollbar (below spectrogram, drag to navigate) ── */
 .scrollbar-strip {
-  height: 14px; flex-shrink: 0;
-  display: flex; background: var(--bg-deep);
-  border-top: 1px solid var(--border);
-  border-bottom: 1px solid var(--border);
+  height: 6px; flex-shrink: 0;
+  display: flex; background: var(--bg-panel);
 }
 .scrollbar-gutter {
-  width: 56px; flex-shrink: 0;
+  width: 112px; flex-shrink: 0;
   background: var(--bg-panel); border-right: 1px solid var(--border);
 }
 .scrollbar-strip canvas { flex: 1; min-width: 0; display: block; cursor: pointer; }
@@ -439,45 +550,6 @@ html, body {
 }
 .token-popup.show { opacity: 1; transform: translateY(0); }
 
-/* ── Spectrogram overlay buttons ── */
-.spec-overlay-btns {
-  position: absolute; top: 6px; right: 8px; z-index: 5;
-  display: flex; flex-direction: column; align-items: flex-end; gap: 4px;
-}
-.formant-card {
-  display: flex; flex-direction: column; gap: 0;
-  border: 1px solid rgba(var(--accent-rgb),0.5); border-radius: 6px;
-  background: var(--card-bg); backdrop-filter: blur(4px);
-  overflow: hidden;
-}
-.formant-card__generate {
-  padding: 4px 10px; border: none; border-bottom: 1px solid rgba(var(--accent-rgb),0.25);
-  background: transparent; color: var(--accent-soft); font-size: 11px;
-  font-family: inherit; cursor: pointer; white-space: nowrap;
-  transition: background 100ms, color 100ms;
-}
-.formant-card__generate:hover { background: rgba(var(--accent-rgb),0.2); color: var(--accent-strong); }
-.formant-card__generate.computing { color: var(--warn-computing); cursor: wait; }
-.formant-card__generate:disabled { pointer-events: none; }
-.formant-card__seg {
-  display: flex; align-items: stretch;
-}
-.formant-card__seg-btn {
-  flex: 1; padding: 4px 8px; border: none; background: transparent;
-  border-right: 1px solid rgba(var(--accent-rgb),0.25);
-  cursor: pointer; font-family: inherit; font-size: 10px; font-weight: 600;
-  color: var(--card-icon); transition: background 100ms, color 100ms;
-}
-.formant-card__seg-btn:last-child { border-right: none; }
-.formant-card__seg-btn:hover { color: var(--card-icon-hover); background: rgba(var(--accent-rgb),0.12); }
-/* Each F1/F2/F3 button lights up in the same color as its dot track on the
-   spectrogram when active; the trailing "All" button uses the neutral accent. */
-.formant-card__seg-btn--f1.on { color: #ff5050; background: rgba(255,80,80,0.18); }
-.formant-card__seg-btn--f2.on { color: #50dc50; background: rgba(80,220,80,0.18); }
-.formant-card__seg-btn--f3.on { color: #5090ff; background: rgba(80,140,255,0.18); }
-.formant-card__seg-btn.on:not(.formant-card__seg-btn--f1):not(.formant-card__seg-btn--f2):not(.formant-card__seg-btn--f3) {
-  color: var(--accent-strong); background: rgba(var(--accent-rgb),0.25);
-}
 .calc-spec-btn {
   padding: 4px 10px; border-radius: 5px; border: 1px solid rgba(var(--accent-rgb),0.5);
   background: var(--card-bg); color: var(--accent-soft); font-size: 11px;
@@ -490,29 +562,59 @@ html, body {
 .calc-spec-btn.active { background: rgba(var(--accent-rgb),0.3); color: var(--accent-strong); border-color: var(--accent); }
 .calc-spec-btn:disabled { pointer-events: none; }
 
-/* ── Drop overlay ── */
-.drop-overlay {
-  position: absolute; inset: 0; z-index: 200;
-  display: flex; flex-direction: column;
-  align-items: center; justify-content: center; gap: 8px;
-  background: var(--backdrop);
-  backdrop-filter: blur(4px);
-  color: var(--text-mute); font-size: 14px;
-  opacity: 0; pointer-events: none;
-  transition: opacity 140ms;
+/* ── Toolbar group divider (2026-08-17 toolbar cleanup) ── */
+.toolbar-divider {
+  width: 1px; height: 28px; background: var(--border-ui2); flex-shrink: 0;
 }
-.drop-overlay.active { opacity: 1; pointer-events: all; }
 
-/* ── Zoom slider ── */
+/* ── Zoom slider (2026-08-17: replaced the native OS slider chrome with a thin custom
+   track + circular thumb, and shrank the −/+ glyphs to plain icon buttons, for a
+   sleeker look matching the rest of the flattened toolbar) ── */
 .zoom-row {
-  display: flex; align-items: center; gap: 6px; margin-left: 4px;
+  display: flex; align-items: center; gap: 5px; margin-left: 2px;
 }
-.zoom-label {
-  font-size: 10px; font-family: var(--mono); color: var(--text-dark);
+.toolbar .zoom-step-btn {
+  width: 20px; min-width: 20px; padding: 0;
+  font-size: 14px; font-weight: 400; color: var(--text-mute);
 }
-input[type="range"] { width: 90px; accent-color: var(--accent); cursor: pointer; }
+.toolbar .zoom-step-btn:hover { color: var(--text); background: transparent; }
+.toolbar .zoom-step-btn:disabled {
+  opacity: 0.35; cursor: default;
+}
 
-/* ── MFA button ── */
+input[type="range"] {
+  width: 100px; cursor: pointer;
+  -webkit-appearance: none; appearance: none;
+  background: transparent;
+}
+input[type="range"]::-webkit-slider-runnable-track {
+  height: 3px; border-radius: 2px; background: #6f7784;
+}
+input[type="range"]::-moz-range-track {
+  height: 3px; border-radius: 2px; background: #6f7784;
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 13px; height: 13px; border-radius: 50%;
+  background: var(--text-dim); margin-top: -5px;
+  transition: background 100ms, transform 100ms;
+}
+input[type="range"]::-moz-range-thumb {
+  width: 13px; height: 13px; border-radius: 50%; border: none;
+  background: var(--text-dim);
+  transition: background 100ms, transform 100ms;
+}
+:root[data-theme="light"] input[type="range"]::-webkit-slider-runnable-track { background: #aab2bf; }
+:root[data-theme="light"] input[type="range"]::-moz-range-track { background: #aab2bf; }
+input[type="range"]:hover::-webkit-slider-thumb,
+input[type="range"]:focus::-webkit-slider-thumb { background: var(--accent); transform: scale(1.1); }
+input[type="range"]:hover::-moz-range-thumb,
+input[type="range"]:focus::-moz-range-thumb { background: var(--accent); transform: scale(1.1); }
+
+/* ── MFA button — colored green as a "primary action" accent where it's paired with a
+   plain Cancel button (the MFA word-picker modal's "Align all"); inside the toolbar,
+   `.toolbar .btn`'s higher selector specificity overrides this to the flat toolbar
+   style instead (see 2026-08-17 toolbar cleanup note above `.toolbar .btn`). ── */
 .btn-mfa {
   background: var(--mfa-bg); color: var(--mfa-text); border-color: var(--mfa-border);
 }
@@ -529,11 +631,34 @@ input[type="range"] { width: 90px; accent-color: var(--accent); cursor: pointer;
 .colormap-select:hover { background: var(--border-ui); color: var(--text); }
 
 /* ── Tier visibility checkbox ── */
+.tier-visibility-bar {
+  height: 30px; flex-shrink: 0;
+  display: flex; align-items: center; gap: 10px;
+  padding: 0 18px 0 16px;
+  background: var(--bg-panel);
+}
+.tier-visibility-title {
+  width: 42px; flex-shrink: 0;
+  font-size: 10px; color: var(--text-dark);
+  font-family: var(--mono); letter-spacing: 0.08em;
+}
+.tier-visibility-label {
+  display: flex; align-items: center; gap: 6px; cursor: pointer;
+  color: var(--text-dark);
+  font-size: 12px; font-family: var(--mono);
+}
+.tier-visibility-label span { color: var(--text-dark); }
+.tier-visibility-label span.is-visible { color: var(--text-dim); }
+.tier-text-size-controls {
+  display: flex; align-items: center; gap: 2px; margin-left: 6px;
+  padding-left: 8px; border-left: 1px solid var(--border);
+}
+.tier-visibility-spacer { margin-left: auto; }
 .tier-visibility-check {
   appearance: none;
   -webkit-appearance: none;
-  width: 14px; height: 14px;
-  border: 1px solid var(--border-surface); border-radius: 2px;
+  width: 16px; height: 16px;
+  border: 1px solid var(--border-surface); border-radius: 4px;
   background: var(--bg-panel); cursor: pointer;
   flex-shrink: 0; position: relative;
 }
@@ -542,7 +667,7 @@ input[type="range"] { width: 90px; accent-color: var(--accent); cursor: pointer;
 }
 .tier-visibility-check:checked::after {
   content: '';
-  position: absolute; left: 3px; top: 1px;
+  position: absolute; left: 4px; top: 2px;
   width: 5px; height: 8px;
   border: 2px solid #fff; border-top: none; border-left: none;
   transform: rotate(45deg);
@@ -557,32 +682,43 @@ input[type="range"] { width: 90px; accent-color: var(--accent); cursor: pointer;
 }
 .tier-delete-btn:hover { color: var(--error-text); opacity: 1; }
 
+/* ── Export button — colored green as a "primary action" accent where it's paired with
+   a plain Cancel button (ExportPopover's "Download"); inside the toolbar, `.toolbar
+   .btn`'s higher selector specificity overrides this to the flat toolbar style instead
+   (see 2026-08-17 toolbar cleanup note above `.toolbar .btn`). ── */
 .btn-export {
   background: var(--export-bg); border-color: var(--export-border); color: #fff;
 }
 .btn-export:hover { background: var(--export-bg-hover); border-color: var(--export-border-hover); color: #fff; }
 
-.btn-tier {
-  background: var(--tier-bg); border-color: var(--tier-border); color: var(--tier-text);
-}
-.btn-tier:hover { background: var(--tier-bg-hover); border-color: var(--tier-border-hover); }
-
 /* ── Shared surface classes for popovers/modals/menus/toasts (theme-aware) ── */
 .ctx-menu {
   position: fixed; background: var(--bg-surface); border: 1px solid var(--border-surface);
-  border-radius: 6px; padding: 4px 0; z-index: 9999; min-width: 160px;
-  box-shadow: 0 4px 16px var(--shadow-color);
-  font-family: Inter, system-ui, sans-serif; font-size: 12px; color: var(--text-dim);
+  border-radius: 8px; padding: 7px 0; z-index: 9999; min-width: 180px;
+  box-shadow: 0 16px 44px rgba(0,0,0,0.34), 0 0 0 1px rgba(255,255,255,0.02) inset;
+  font-family: Inter, system-ui, sans-serif; font-size: 13px; color: var(--text-dim);
+  overflow: visible;
 }
-.ctx-menu__item { padding: 6px 14px; cursor: pointer; }
-.ctx-menu__item:hover { background: var(--border-surface); }
-.ctx-menu__sep { height: 1px; background: var(--border-surface); margin: 4px 0; }
+.ctx-menu__item { padding: 8px 16px; cursor: pointer; }
+.ctx-menu__item:hover { background: var(--row-active-bg); color: var(--text); }
+.ctx-menu__item--disabled { color: var(--text-dark); opacity: 0.55; cursor: default; pointer-events: none; }
+.ctx-menu__sep { height: 1px; background: var(--border-surface); margin: 7px 0; }
+
+.ctx-menu__label {
+  padding: 9px 16px 5px; font-size: 11px; font-weight: 700; color: var(--text-mute);
+  letter-spacing: 0.04em;
+}
+.ctx-menu__checkbox-row, .ctx-menu__radio-row {
+  display: flex; align-items: center; gap: 10px;
+}
+.ctx-menu__checkbox-row input { margin: 0; cursor: pointer; width: 15px; height: 15px; }
+.ctx-menu__radio { display: inline-block; width: 10px; color: var(--accent-strong); }
 
 .popover-panel {
   position: absolute; top: 100%; right: 0; margin-top: 4px;
   background: var(--bg-surface); border: 1px solid var(--border-surface);
-  border-radius: 8px; padding: 10px 12px; z-index: 8000;
-  box-shadow: 0 4px 16px var(--shadow-color);
+  border-radius: 8px; padding: 12px 14px; z-index: 8000;
+  box-shadow: 0 16px 44px rgba(0,0,0,0.32);
 }
 
 .shortcuts-popover-panel {
@@ -616,6 +752,7 @@ input[type="range"] { width: 90px; accent-color: var(--accent); cursor: pointer;
 }
 .toast--error { background: var(--error-bg); border: 1px solid var(--error-border); color: var(--error-text); }
 .toast--warn  { background: var(--warn-bg);  border: 1px solid var(--warn-border);  color: var(--warn-text); }
+.toast--info  { background: rgba(var(--accent-rgb), 0.14); border: 1px solid var(--accent); color: var(--accent-strong); }
 
 .mfa-queue-dropdown {
   position: absolute; top: 100%; right: 0; margin-top: 4px;

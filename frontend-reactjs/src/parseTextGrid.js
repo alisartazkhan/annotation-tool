@@ -24,16 +24,20 @@ export function parseTextGrid(text) {
         const intMatch = lines[i].match(/^\s*intervals\s*\[(\d+)\]\s*:/);
         if (intMatch) {
           i++;
-          let xmin = 0, xmax = 0, text = '', score = null;
+          let xmin = 0, xmax = 0, text = '', score = null, edited = false, originalText = null;
           while (i < lines.length && !lines[i].match(/^\s*intervals\s*\[\d+\]\s*:/)) {
             const xminM = lines[i].match(/^\s*xmin\s*=\s*([\d.]+)/);
             const xmaxM = lines[i].match(/^\s*xmax\s*=\s*([\d.]+)/);
             const textM = lines[i].match(/^\s*text\s*=\s*"(.*)"/);
             const scoreM = lines[i].match(/^\s*score\s*=\s*([\d.]+)/);
+            const editedM = lines[i].match(/^\s*edited\s*=\s*(true|1)\s*$/i);
+            const originalM = lines[i].match(/^\s*original\s*=\s*"(.*)"/);
             if (xminM) xmin = parseFloat(xminM[1]);
             if (xmaxM) xmax = parseFloat(xmaxM[1]);
             if (textM) text = textM[1];
             if (scoreM) score = parseFloat(scoreM[1]);
+            if (editedM) edited = true;
+            if (originalM) originalText = originalM[1];
             i++;
             if (lines[i] && (lines[i].match(/^\s*intervals\s*\[\d+\]\s*:/) ||
                 lines[i].match(/^\s*item\s*\[\d+\]\s*:/) ||
@@ -41,6 +45,8 @@ export function parseTextGrid(text) {
           }
           const item = { t0: xmin, t1: xmax, text: text.trim() };
           if (score !== null) item.score = score;
+          if (edited) item.edited = true;
+          if (originalText !== null) item.originalText = originalText;
           if (text.trim()) items.push(item);
           continue;
         }

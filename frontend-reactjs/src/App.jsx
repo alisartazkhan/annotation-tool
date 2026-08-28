@@ -3,9 +3,9 @@ import { parseTextGrid } from './parseTextGrid.js';
 import { setupCanvas, fmtTime } from './canvasUtils.js';
 import {
   COLORMAPS, inferno,
-  buildMelSpectrogram, buildRmsEnvelope,
+  buildMelSpectrogram,
 } from './dsp.js';
-import { WELCOME_TITLE, WELCOME_TEXT, SHORTCUTS, TILE_EDITING_HINTS } from './shortcuts.js';
+import { WELCOME_TITLE, WELCOME_TEXT, SHORTCUTS, TILE_EDITING_HINTS, TILE_COLOR_LEGEND } from './shortcuts.js';
 
 
 let _nextId = 1;
@@ -26,6 +26,7 @@ const YZOOM_STEP = 1.2;
 const FONT_SCALE_MIN = 0.7;
 const FONT_SCALE_MAX = 2;
 const FONT_SCALE_STEP = 1.15;
+const TIMELINE_ZOOM_STEP = 2; // slider percentage points per toolbar +/- click
 
 // ── Enhanced-spectrogram rolling prefetch buffer ────────────────────────────
 const SPEC_BUFFER_MULTIPLIER = 3;     // total cached span = 3x the current viewport
@@ -268,9 +269,33 @@ function LabelEditorPopover({ editor, onCommit, onClose }) {
 const EDITED_GREEN = [0, 169, 165]; // #00A9A5
 // Words with a perfect (1.0) confidence score get this exact tone instead of the
 // lightened end of the scoreColor() gradient, so they read as clearly "max confidence".
-const SCORE_ONE_GREEN = [0, 200, 50]; // #00C832
+const SCORE_ONE_GREEN = [42, 166, 78]; // #2AA64E
+// Shared default hue for any tile with no confidence score — words, phones, and
+// custom tiers all render this same lavender until a word tile earns a score.
+const DEFAULT_TILE_RGB = [150, 124, 184];
+const TIMELINE_GUTTER = 112;
+const SPEC_AXIS_FMAX = 8000;
+const SPEC_AXIS_TICKS = [100, 200, 500, 1000, 2000, 4000, 8000].map(hz => ({
+  hz,
+  label: hz >= 1000 ? `${hz / 1000} kHz` : `${hz} Hz`,
+  position: 100 * (1 - (2595 * Math.log10(1 + hz / 700)) / (2595 * Math.log10(1 + SPEC_AXIS_FMAX / 700))),
+}));
 
-function scoreColor(score, alpha = 1) {
+// Continuous (non-tick) frequency formatting for the live crosshair readout —
+// SPEC_AXIS_TICKS' label field is fine for its fixed round values but has no
+// decimal precision, which the crosshair needs since its value moves continuously.
+function fmtCrosshairHz(hz) {
+  return hz >= 1000 ? `${(hz / 1000).toFixed(2)} kHz` : `${Math.round(hz)} Hz`;
+}
+
+// Swatch colors for the ShortcutsPopover's tile-color legend (TILE_COLOR_LEGEND in
+// shortcuts.js). `default` must stay in sync with drawTier's `defaultRgb` literal.
+const TILE_COLOR_SWATCHES = {
+  default: `rgb(${DEFAULT_TILE_RGB.join(',')})`,
+  edited: `rgb(${EDITED_GREEN.join(',')})`,
+};
+
+function scoreColorRgb(score) {
   let r = score < 0.5 ? 255 : Math.round(255 * (1 - (score - 0.5) * 2));
   let g = score > 0.5 ? 200 : Math.round(200 * score * 2);
   let b = 50;
@@ -282,7 +307,37 @@ function scoreColor(score, alpha = 1) {
     g = Math.round(g + (255 - g) * lighten);
     b = Math.round(b + (255 - b) * lighten);
   }
+  return [r, g, b];
+}
+
+function scoreColor(score, alpha = 1) {
+  const [r, g, b] = scoreColorRgb(score);
   return alpha < 1 ? `rgba(${r},${g},${b},${alpha})` : `rgb(${r},${g},${b})`;
+}
+
+function rgbaFromRgb(rgb, alpha) {
+  return alpha < 1 ? `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${alpha})` : `rgb(${rgb[0]},${rgb[1]},${rgb[2]})`;
+}
+
+function lightenRgb(rgb, amount) {
+  return rgb.map(channel => Math.round(channel + (255 - channel) * amount));
+}
+
+function roundedRect(ctx, x, y, w, h, r, roundLeft = true, roundRight = true) {
+  const radius = Math.max(0, Math.min(r, w / 2, h / 2));
+  const leftRadius = roundLeft ? radius : 0;
+  const rightRadius = roundRight ? radius : 0;
+  ctx.beginPath();
+  ctx.moveTo(x + leftRadius, y);
+  ctx.lineTo(x + w - rightRadius, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + rightRadius);
+  ctx.lineTo(x + w, y + h - rightRadius);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - rightRadius, y + h);
+  ctx.lineTo(x + leftRadius, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - leftRadius);
+  ctx.lineTo(x, y + leftRadius);
+  ctx.quadraticCurveTo(x, y, x + leftRadius, y);
+  ctx.closePath();
 }
 
 function pixelsToCanvas(res) {
@@ -304,14 +359,49 @@ function assignRows(items) {
   return sorted;
 }
 
+// How many of a tier's stacked rows (item.row, assigned globally and stably by
+// assignRows above) actually need drawing for the given [t0,t1] view — a stacked
+// overlap elsewhere in the file, out of view, shouldn't keep every other view squeezed
+// into thin rows when nothing currently visible overlaps. Shared by drawTier (rendering)
+// and hitTest (click/drag hit-testing) — they must always agree on this, or clicking a
+// visually-drawn tile could hit-test against the wrong row.
+function visibleRowCount(items, t0, t1) {
+  let max = 1;
+  for (const it of items) {
+    if (it.t1 > t0 && it.t0 < t1) {
+      const r = (it.row ?? 0) + 1;
+      if (r > max) max = r;
+    }
+  }
+  return max;
+}
+
 function withIds(items) {
   return items.map(it => ({ ...it, id: it.id ?? nextId(), row: 0 }));
 }
 
-function serializeTextGrid(duration, wordItems, phoneItems, customTiers = [], praatCompat = false) {
+// Custom tier labels are normally truncated+uppercased for the SHOW bar and the
+// tier's own gutter (e.g. "syllables" -> "SYLL"). But now that a custom tier can be
+// promoted into the Words/Phones role (see promoteTierToRole/TierSourceMenu), a tier
+// literally named "wrd" or "phn" is a normal thing to encounter — and that truncation
+// makes it visually identical to the built-in "WRD"/"PHN" labels. Fall back to the
+// tier's real name in that case, which is enough whenever the casing differs (e.g.
+// "wrd" reads as clearly distinct from "WRD"). If the real name is an exact-case
+// match too — a tier literally named "WRD"/"PHN" — no truncation or casing trick can
+// make it visually distinct, so mark it explicitly instead.
+function customTierLabel(name) {
+  const truncated = name.toUpperCase().slice(0, 4);
+  if (truncated !== 'WRD' && truncated !== 'PHN') return truncated;
+  return (name === 'WRD' || name === 'PHN') ? `${name} (tier)` : name;
+}
+
+function serializeTextGrid(
+  duration, wordItems, phoneItems, customTiers = [], praatCompat = false,
+  wordsTierName = 'words', phonesTierName = 'phones',
+) {
   const tierData = [
-    { name: 'words', items: wordItems },
-    { name: 'phones', items: phoneItems },
+    { name: wordsTierName, items: wordItems },
+    { name: phonesTierName, items: phoneItems },
     ...customTiers.map(t => ({ name: t.name, items: t.items })),
   ];
 
@@ -365,10 +455,10 @@ function serializeTextGrid(duration, wordItems, phoneItems, customTiers = [], pr
 function ExportPopover({ defaultName, customTiers, onExport, onClose }) {
   const [name, setName] = useState(defaultName);
   const [mode, setMode] = useState('full'); // 'praat' | 'full'
+  const base = (name.trim() || defaultName).replace(/\.TextGrid$/i, '');
   const doExport = () => {
-    const base = (name.trim() || defaultName).replace(/\.TextGrid$/i, '');
-    if (mode === 'praat') onExport(`${base}_praat.TextGrid`, false);
-    else                  onExport(`${base}.TextGrid`,       true);
+    if (mode === 'praat') onExport(`${base}_praat.TextGrid`, true);
+    else                  onExport(`${base}.TextGrid`,       false);
   };
   const rowStyle = (active) => ({
     display: 'flex', alignItems: 'flex-start', gap: 8, padding: '7px 10px',
@@ -376,7 +466,7 @@ function ExportPopover({ defaultName, customTiers, onExport, onClose }) {
     background: active ? 'var(--row-active-bg)' : 'transparent',
     border: `1px solid ${active ? 'var(--border-surface)' : 'transparent'}`,
   });
-  const base = (name.trim() || defaultName).replace(/\.TextGrid$/i, '');
+  const tierList = `WRD + PHN${customTiers.length > 0 ? ` + ${customTiers.map(t => t.name).join(', ')}` : ''}`;
   return (
     <div className="popover-panel" style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: 280 }}>
       <div style={{ fontSize: 11, color: 'var(--card-label)', fontFamily: 'Inter,sans-serif' }}>Save as</div>
@@ -402,7 +492,7 @@ function ExportPopover({ defaultName, customTiers, onExport, onClose }) {
               Praat compatible
             </div>
             <div style={{ fontSize: 10, color: 'var(--text-mute)', fontFamily: 'Inter,sans-serif', marginTop: 1 }}>
-              WRD + PHN{customTiers.length > 0 ? ` + ${customTiers.map(t => t.name).join(', ')}` : ''} · <em>{base}_praat.TextGrid</em>
+              {tierList} — scores/edited metadata omitted so Praat opens without warnings · <em>{base}_praat.TextGrid</em>
             </div>
           </div>
         </label>
@@ -414,7 +504,7 @@ function ExportPopover({ defaultName, customTiers, onExport, onClose }) {
               Full export
             </div>
             <div style={{ fontSize: 10, color: 'var(--text-mute)', fontFamily: 'Inter,sans-serif', marginTop: 1 }}>
-              WRD + PHN{customTiers.length > 0 ? ` + ${customTiers.map(t => t.name).join(', ')}` : ''} · <em>{base}.TextGrid</em>
+              {tierList} — includes confidence scores + edited/validated metadata · <em>{base}.TextGrid</em>
             </div>
           </div>
         </label>
@@ -456,6 +546,78 @@ function TierNamePopover({ onAdd, onClose }) {
         onClick={doAdd}
         style={{ padding: '4px 10px', fontSize: 12 }}
       >Add</button>
+    </div>
+  );
+}
+
+// Toolbar overflow menu (2026-08-17 toolbar cleanup) — holds the controls that don't
+// need to be visible at a glance: Loop, Add Tier, Load TextGrid, theme toggle. Reuses
+// the `.ctx-menu` visual (border/shadow/surface tokens) but anchors under the "More"
+// button like `.mfa-queue-dropdown`/`.popover-panel` do (position:absolute, not
+// position:fixed at a click coordinate like the tier/spectrogram right-click menus) —
+// the inline style below overrides `.ctx-menu`'s position/left/top for that reason.
+function MoreMenu({
+  onClose,
+  loopMode, onToggleLoop,
+  showTierManager, onOpenTierManager, onAddTier, onCloseTierManager,
+  onLoadTextGrid, onLoadWav,
+  onToggleTheme,
+}) {
+  const menuRef = useRef(null);
+  useEffect(() => {
+    const dismiss = (e) => { if (menuRef.current && !menuRef.current.contains(e.target)) onClose(); };
+    document.addEventListener('mousedown', dismiss);
+    return () => document.removeEventListener('mousedown', dismiss);
+  }, [onClose]);
+
+  return (
+    <div ref={menuRef} className="ctx-menu" style={{ position: 'absolute', top: '100%', right: 0, marginTop: 4, minWidth: 180 }}>
+      <label className="ctx-menu__item ctx-menu__checkbox-row">
+        <input type="checkbox" checked={loopMode} onChange={onToggleLoop} />
+        ⟲ Loop selection
+      </label>
+      <div className="ctx-menu__sep" />
+      <div className="ctx-menu__item" style={{ position: 'relative' }} onClick={onOpenTierManager}>
+        + Add tier
+        {showTierManager && (
+          // stopPropagation so clicking the popover's own input/button doesn't bubble
+          // up to the row's onClick above and immediately re-toggle it closed.
+          <div onClick={(e) => e.stopPropagation()}>
+            <TierNamePopover onAdd={onAddTier} onClose={onCloseTierManager} />
+          </div>
+        )}
+      </div>
+      <label className="ctx-menu__item" style={{ display: 'flex', alignItems: 'center' }}>
+        <span style={{ display: 'inline-flex', marginRight: 8 }}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+          </svg>
+        </span>
+        Load TextGrid
+        <input type="file" accept=".TextGrid,.textgrid" onChange={onLoadTextGrid} style={{ display: 'none' }} />
+      </label>
+      <label className="ctx-menu__item" style={{ display: 'flex', alignItems: 'center' }}>
+        <span style={{ display: 'inline-flex', marginRight: 8 }}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+          </svg>
+        </span>
+        Load Wav
+        <input type="file" accept=".wav,audio/wav" onChange={onLoadWav} style={{ display: 'none' }} />
+      </label>
+      <div className="ctx-menu__sep" />
+      <div
+        className="ctx-menu__item"
+        style={{ display: 'flex', alignItems: 'center' }}
+        onClick={() => { onToggleTheme(); onClose(); }}
+      >
+        <span style={{ display: 'inline-flex', marginRight: 8 }}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+          </svg>
+        </span>
+        Switch theme
+      </div>
     </div>
   );
 }
@@ -515,12 +677,192 @@ function FilePicker({ wavs, tgs, onSelect }) {
   );
 }
 
-function ShortcutSectionLabel({ text }) {
+// First-save confirmation — mirrors the MFA word-picker modal's modal-backdrop/modal-card
+// + Cancel/primary-action button footer so it doesn't look like a one-off dialog. "Save"
+// reuses .btn-export's green (both are "commit tiers to a file" actions).
+function SaveConfirmModal({ filename, onConfirm, onCancel }) {
+  const [dontAskAgain, setDontAskAgain] = useState(false);
   return (
-    <div style={{
-      gridColumn: '1 / -1', fontSize: 10, fontWeight: 600, color: 'var(--text-mute)',
-      letterSpacing: 0.5, padding: '14px 8px 6px',
-    }}>{text}</div>
+    <div className="modal-backdrop" onClick={(e) => { if (e.target === e.currentTarget) onCancel(); }}>
+      <div className="modal-card" style={{ padding: '20px 24px', minWidth: 340, maxWidth: 440, fontFamily: 'Inter,system-ui,sans-serif' }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)', marginBottom: 6 }}>
+          Overwrite existing TextGrid?
+        </div>
+        <div style={{ fontSize: 11, color: 'var(--text-mute)', marginBottom: 16, lineHeight: 1.5 }}>
+          This will overwrite <code style={{ color: 'var(--accent-soft)' }}>{filename}</code> in{' '}
+          <code style={{ color: 'var(--accent-soft)' }}>public/</code> with the current state of all tiers.
+        </div>
+
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text-dim)', marginBottom: 16, cursor: 'pointer' }}>
+          <input type="checkbox" checked={dontAskAgain} onChange={e => setDontAskAgain(e.target.checked)} />
+          Don't ask me again
+        </label>
+
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+          <button className="btn" onClick={onCancel}>Cancel</button>
+          <button className="btn btn-export" onClick={() => onConfirm(dontAskAgain)}>Save</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Confirms before loading a wav (via "Load Wav" or drag-and-drop) overwrites an
+// existing same-named file in public/ — mirrors SaveConfirmModal's shell, but
+// deliberately has no "Don't ask me again" option: overwriting an audio file is a
+// less routine, more consequential action than the TextGrid autosave case, so this
+// always asks (explicit user decision, not an oversight).
+function WavOverwriteModal({ filename, onConfirm, onCancel }) {
+  return (
+    <div className="modal-backdrop" onClick={(e) => { if (e.target === e.currentTarget) onCancel(); }}>
+      <div className="modal-card" style={{ padding: '20px 24px', minWidth: 340, maxWidth: 440, fontFamily: 'Inter,system-ui,sans-serif' }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)', marginBottom: 6 }}>
+          Overwrite existing audio file?
+        </div>
+        <div style={{ fontSize: 11, color: 'var(--text-mute)', marginBottom: 16, lineHeight: 1.5 }}>
+          A file named <code style={{ color: 'var(--accent-soft)' }}>{filename}</code> already exists in{' '}
+          <code style={{ color: 'var(--accent-soft)' }}>public/</code>. Loading this file will replace it.
+        </div>
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+          <button className="btn" onClick={onCancel}>Cancel</button>
+          <button className="btn btn-export" onClick={onConfirm}>Overwrite & Load</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Renders as a Fragment (not a wrapping element) so the header row and its child rows
+// stay direct children of ShortcutsPopover's 2-column CSS grid — a wrapping <div> would
+// pull `children` out of that grid and break the column alignment.
+function CollapsibleSection({ title, open, onToggle, children }) {
+  return (
+    <>
+      <button
+        type="button"
+        onClick={onToggle}
+        style={{
+          gridColumn: '1 / -1', display: 'flex', alignItems: 'center', gap: 6,
+          width: '100%', background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left',
+          fontSize: 10, fontWeight: 600, color: 'var(--text-mute)',
+          letterSpacing: 0.5, padding: '14px 8px 6px',
+        }}
+      >
+        <span style={{
+          display: 'inline-block', fontSize: 8, transition: 'transform 0.15s',
+          transform: open ? 'rotate(90deg)' : 'rotate(0deg)',
+        }}>▶</span>
+        {title}
+      </button>
+      {open && children}
+    </>
+  );
+}
+
+const SPEC_CTX_COLORMAPS = [
+  ['jet', 'Jet'], ['inferno', 'Inferno'], ['viridis', 'Viridis'], ['greys', 'Greys'],
+];
+// Must match the dot/line colors drawSpec uses for each track (see the tracks/formants
+// arrays there) so the direct spectrogram toggles identify their canvas overlays.
+const SPEC_CTX_TRACK_COLORS = { f0: '#f0c828', f1: '#ff5050', f2: '#50dc50', f3: '#5090ff' };
+const SPEC_TRACK_TOGGLES = [
+  ['f0', 'F0', 'Pitch (F0)'],
+  ['f1', 'F1', 'First formant (F1)'],
+  ['f2', 'F2', 'Second formant (F2)'],
+  ['f3', 'F3', 'Third formant (F3)'],
+];
+
+function WaveContextMenu({ x, y, onClose, envelopeVisible, onToggleEnvelope }) {
+  const menuRef = useRef(null);
+  useEffect(() => {
+    const dismiss = (e) => { if (menuRef.current && !menuRef.current.contains(e.target)) onClose(); };
+    document.addEventListener('mousedown', dismiss);
+    return () => document.removeEventListener('mousedown', dismiss);
+  }, [onClose]);
+
+  return (
+    <div ref={menuRef} className="ctx-menu" style={{ left: x, top: y, minWidth: 170 }}>
+      <div className="ctx-menu__label">Waveform</div>
+      <div
+        className="ctx-menu__item ctx-menu__checkbox-row"
+        role="menuitemcheckbox"
+        aria-checked={envelopeVisible}
+        onClick={() => { onToggleEnvelope(); onClose(); }}
+      >
+        <input type="checkbox" checked={envelopeVisible} readOnly tabIndex={-1} />
+        Envelope
+      </div>
+    </div>
+  );
+}
+
+// Right-click menu on the spectrogram — keeps settings and colormap choices in one
+// flat, reactive menu. Track visibility lives in the direct top-right toggle strip.
+function SpecContextMenu({
+  x, y, onClose,
+  colormapName, onColormapChange,
+  specComputing, onForceRefreshSpec,
+  formantComputing, onRegenerateFormants,
+}) {
+  const menuRef = useRef(null);
+  useEffect(() => {
+    const dismiss = (e) => { if (menuRef.current && !menuRef.current.contains(e.target)) onClose(); };
+    document.addEventListener('mousedown', dismiss);
+    return () => document.removeEventListener('mousedown', dismiss);
+  }, [onClose]);
+
+  return (
+    <div ref={menuRef} className="ctx-menu" style={{ left: x, top: y, minWidth: 200 }}>
+      <div className="ctx-menu__label">Spectrogram settings</div>
+      <div className="ctx-menu__item" onClick={() => { onClose(); onForceRefreshSpec(); }}>
+        {specComputing ? '⟳ Refreshing…' : '↻ Force Refresh'}
+      </div>
+      <div className="ctx-menu__item" onClick={() => { onClose(); onRegenerateFormants(); }}>
+        {formantComputing ? 'Generating…' : 'Regenerate formants & pitch'}
+      </div>
+
+      <div className="ctx-menu__sep" />
+
+      <div className="ctx-menu__label">Colormap</div>
+      {SPEC_CTX_COLORMAPS.map(([name, label]) => (
+        <div key={name} className="ctx-menu__item ctx-menu__radio-row" onClick={() => { onColormapChange(name); onClose(); }}>
+          <span className="ctx-menu__radio">{colormapName === name ? '●' : ''}</span>
+          {label}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// Small "⋮" popover on the WRD/PHN gutters — lets the user pick which currently
+// loaded tier should play the Words/Phones role (see promoteTierToRole), for
+// TextGrids where the real word/phone-like annotations live in a tier named
+// something other than the literal "words"/"phones" loadTextGrid expects (see
+// HANDOFF.md's tier-name matching writeup). `tiers` is every currently loaded tier
+// (words, phones, custom); `activeTierId` gets a "●" marker, matching
+// SpecContextMenu's colormap radio rows.
+function TierSourceMenu({ x, y, onClose, title, tiers, activeTierId, onSelect }) {
+  const menuRef = useRef(null);
+  useEffect(() => {
+    const dismiss = (e) => { if (menuRef.current && !menuRef.current.contains(e.target)) onClose(); };
+    document.addEventListener('mousedown', dismiss);
+    return () => document.removeEventListener('mousedown', dismiss);
+  }, [onClose]);
+
+  return (
+    <div ref={menuRef} className="ctx-menu" style={{ left: x, top: y, minWidth: 190 }}>
+      <div className="ctx-menu__label">{title}</div>
+      {tiers.map(t => (
+        <div
+          key={t.id}
+          className="ctx-menu__item ctx-menu__radio-row"
+          onClick={() => { onSelect(t.id); onClose(); }}
+        >
+          <span className="ctx-menu__radio">{activeTierId === t.id ? '●' : ''}</span>
+          {t.label}
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -543,7 +885,42 @@ function ShortcutRows({ rows }) {
   ));
 }
 
+function TileColorLegendRows() {
+  return (
+    <>
+      <div style={{ gridColumn: '1 / -1', padding: '4px 8px 8px' }}>
+        <div style={{
+          height: 8, borderRadius: 4, marginBottom: 4,
+          background: `linear-gradient(to right, ${scoreColor(0)}, ${scoreColor(0.5)}, ${scoreColor(1)})`,
+        }} />
+        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: 'var(--text-mute)' }}>
+          <span>Low confidence</span><span>High confidence</span>
+        </div>
+      </div>
+      {TILE_COLOR_LEGEND.map((row, i) => (
+        <React.Fragment key={row.swatchKey}>
+          <div style={{ padding: '6px 8px', background: i % 2 ? 'var(--bg-panel)' : 'transparent', display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ width: 14, height: 14, borderRadius: 3, background: TILE_COLOR_SWATCHES[row.swatchKey], flexShrink: 0, display: 'inline-block' }} />
+            <span style={{ color: 'var(--text)' }}>{row.label}</span>
+          </div>
+          <div style={{ padding: '6px 8px', background: i % 2 ? 'var(--bg-panel)' : 'transparent', color: 'var(--text-dim)', display: 'flex', alignItems: 'center' }}>
+            {row.desc}
+          </div>
+        </React.Fragment>
+      ))}
+      <div style={{ gridColumn: '1 / -1', padding: '6px 8px 0', fontSize: 11, color: 'var(--text-soft)', lineHeight: 1.5 }}>
+        Selecting a tile keeps its color and "pops" it (stronger fill, solid outline) rather than switching to a different color.
+      </div>
+    </>
+  );
+}
+
 function ShortcutsPopover({ onClose }) {
+  // All closed by default so the popover opens compact; the user expands only the
+  // section(s) they want. Independent toggles, not an accordion — any combo can be open.
+  const [openSections, setOpenSections] = useState({ keyboard: false, tiles: false, colors: false });
+  const toggleSection = (key) => setOpenSections(s => ({ ...s, [key]: !s[key] }));
+
   return (
     <div className="shortcuts-popover-panel" style={{ fontFamily: 'Inter,system-ui,sans-serif' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 12 }}>
@@ -562,16 +939,21 @@ function ShortcutsPopover({ onClose }) {
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '150px 1fr', fontSize: 12 }}>
-        <ShortcutSectionLabel text="KEYBOARD" />
-        <ShortcutRows rows={SHORTCUTS} />
-        <ShortcutSectionLabel text="TILE EDITING (EDIT MODE)" />
-        <ShortcutRows rows={TILE_EDITING_HINTS} />
+        <CollapsibleSection title="KEYBOARD" open={openSections.keyboard} onToggle={() => toggleSection('keyboard')}>
+          <ShortcutRows rows={SHORTCUTS} />
+        </CollapsibleSection>
+        <CollapsibleSection title="TILE EDITING (UNLOCKED)" open={openSections.tiles} onToggle={() => toggleSection('tiles')}>
+          <ShortcutRows rows={TILE_EDITING_HINTS} />
+        </CollapsibleSection>
+        <CollapsibleSection title="TILE COLORS" open={openSections.colors} onToggle={() => toggleSection('colors')}>
+          <TileColorLegendRows />
+        </CollapsibleSection>
       </div>
     </div>
   );
 }
 
-function ConfidenceDashboard({ words }) {
+function ConfidenceDashboard({ words, onSeek }) {
   const scored = words.filter(w => w.score != null && !w.edited).sort((a, b) => a.score - b.score);
   const edited = words.filter(w => w.edited);
   if (scored.length === 0) {
@@ -651,7 +1033,18 @@ function ConfidenceDashboard({ words }) {
         LOWEST CONFIDENCE
       </div>
       {low.map(w => (
-        <div key={w.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '3px 0', borderBottom: '1px solid var(--border)' }}>
+        <div
+          key={w.id}
+          onClick={() => onSeek?.(w)}
+          title={`Jump to "${w.text || '<empty>'}" at ${w.t0.toFixed(2)}s`}
+          style={{
+            display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+            padding: '3px 4px', margin: '0 -4px', borderRadius: 4,
+            borderBottom: '1px solid var(--border)', cursor: onSeek ? 'pointer' : 'default',
+          }}
+          onMouseEnter={e => { if (onSeek) e.currentTarget.style.background = 'var(--bg-surface)'; }}
+          onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
+        >
           <span style={{ fontSize: 12, color: 'var(--text-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 120 }}>
             {w.text || '<empty>'}
           </span>
@@ -723,18 +1116,20 @@ export default function App() {
   const [autoPlayTile, setAutoPlayTile] = useState(false);
   const [zoomValue, setZoomValue]       = useState(72);
   const [popup, setPopup]               = useState(null);
-  const [dropping, setDropping]         = useState(false);
-  const [colormapName, setColormapName] = useState('jet');
-  const [formantVisible, setFormantVisible] = useState({ f1: true, f2: true, f3: true });
+  const [colormapName, setColormapName] = useState('viridis');
+  const [envelopeVisible, setEnvelopeVisible] = useState(true);
+  const [formantVisible, setFormantVisible] = useState({ f0: false, f1: false, f2: false, f3: false });
   const [specComputing, setSpecComputing] = useState(false);
   const [formantComputing, setFormantComputing] = useState(false);
+  const [waveCtxMenu, setWaveCtxMenu]   = useState(null); // { x, y } | null — right-click menu on the waveform
+  const [specCtxMenu, setSpecCtxMenu]   = useState(null); // { x, y } | null — right-click menu on the spectrogram
+  const [specCrosshair, setSpecCrosshair] = useState(null); // { y, hz } | null — live frequency readout under the mouse
   const [editMode, setEditMode]         = useState(true);
   const [labelEditor, setLabelEditor]   = useState(null); // { id, tierId, tierType, text, x, y, boxW }
   const [showDashboard, setShowDashboard] = useState(false);
   const [showShortcutsPopover, setShowShortcutsPopover] = useState(false);
-  // Chrome-only theme (toolbar/panels/popovers). drawWave/drawTier also read themeRef for their
-  // background fill (see themeRef below) so the plot backgrounds match the light-theme panel bg;
-  // all other canvas colors (waveform stroke, spectrogram, confidence coloring) stay frozen dark.
+  // Chrome-only theme (toolbar/panels/popovers). A small set of draw* colors also read
+  // themeRef so plot backgrounds/text stay coherent in light mode; see HANDOFF.md.
   const [theme, setTheme] = useState(() => document.documentElement.getAttribute('data-theme') || 'dark');
   const themeRef = useRef(theme);
   const [playbackRate, setPlaybackRate]   = useState(1);
@@ -743,6 +1138,9 @@ export default function App() {
   const [mfaWarning, setMfaWarning]       = useState(null);   // string | null
   const [mfaWordPicker, setMfaWordPicker] = useState(null);   // { words: WordItem[], sel } | null
   const [mfaQueueOpen, setMfaQueueOpen]   = useState(false);  // dropdown visible
+  const [wordsTierName, setWordsTierName]   = useState('words');  // display/export name of whichever tier plays the Words role
+  const [phonesTierName, setPhonesTierName] = useState('phones'); // display/export name of whichever tier plays the Phones role
+  const [tierSourceMenu, setTierSourceMenu] = useState(null); // { role: 'words'|'phones', x, y } | null
   const [setupError, setSetupError]       = useState(null);   // string | null — shown before audio loads
   const [memoryWarning, setMemoryWarning] = useState(false);  // shown for audio > 30 min
   const [filePicker, setFilePicker]       = useState(null);   // { wavs, tgs } | null — shown when multiple files detected
@@ -750,19 +1148,26 @@ export default function App() {
   const [wordsVisible, setWordsVisible]   = useState(true);
   const [phonesVisible, setPhonesVisible] = useState(true);
   const [showTierManager, setShowTierManager] = useState(false);
-  const [selectedTileIds, setSelectedTileIds] = useState(new Set()); // ids of selected tiles (drives rerender)
-  const [selectedTierIds, setSelectedTierIds] = useState(new Set()); // tier border highlight
+  const [selectedTierIds, setSelectedTierIds] = useState(new Set()); // tier border highlight; also drives re-render on tile (de)selection
   const [showExportPopover, setShowExportPopover] = useState(false);
+  const [showMoreMenu, setShowMoreMenu] = useState(false);
   const [saveState, setSaveState] = useState(null); // null | 'saving' | 'saved' | 'error'
   const [isDirty, setIsDirty]     = useState(false);
   const savedTextGridRef          = useRef(null);   // serialized baseline after load or save
+  const [showSaveConfirm, setShowSaveConfirm] = useState(false); // first-save-this-session overwrite confirmation
+  const [wavOverwriteConfirm, setWavOverwriteConfirm] = useState(null); // { file } | null — see loadWavFile
+  let skipSaveConfirmInit = false;
+  try { skipSaveConfirmInit = localStorage.getItem('skipSaveConfirm') === 'true'; } catch (_) {}
+  const skipSaveConfirmRef = useRef(skipSaveConfirmInit); // "Don't ask me again" — persisted across sessions
   const saveTimerRef = useRef(null);
   const MFA_SERVER = 'http://localhost:5050';
   const mfaQueueRef = useRef([]);
   const mfaProcessingRef = useRef(false);
+  const wordsTierNameRef = useRef('words');
+  const phonesTierNameRef = useRef('phones');
   const playbackRateRef = useRef(1);
 
-  const panelSplitRef  = useRef(0.45);
+  const panelSplitRef  = useRef(0.25);
   const wavePanelRef   = useRef(null);
   const specPanelRef   = useRef(null);
   const wrdTierRef     = useRef(null);
@@ -807,7 +1212,6 @@ export default function App() {
   // 'waveform' | 'tiles' — which panel was last clicked, so +/- keys know whether to
   // adjust yZoomRef or fontScaleRef. No state twin: nothing displays this value.
   const focusedPanelRef  = useRef('waveform');
-  const specWorkerRef    = useRef(null);
   const wordsRef         = useRef([]);
   const phonesRef        = useRef([]);
   const customTiersRef   = useRef([]);
@@ -816,14 +1220,13 @@ export default function App() {
   const customCanvasRefs = useRef({}); // keyed by tier id
   const customTierDivRefs = useRef({}); // keyed by tier id — the .tier div element
   const durationRef      = useRef(70);
-  const colormapNameRef  = useRef('jet');
-  const formantVisibleRef = useRef({ f1: true, f2: true, f3: true }); // which formant dot-tracks are drawn
-  const rmsEnvRef        = useRef(null);
+  const colormapNameRef  = useRef('viridis');
+  const envelopeVisibleRef = useRef(true); // whether drawWave draws the RMS envelope overlay
+  const formantVisibleRef = useRef({ f0: false, f1: false, f2: false, f3: false }); // which formant/pitch dot-tracks are drawn
   const formantTrackRef  = useRef(null);
   const editModeRef      = useRef(true);
   const undoStackRef     = useRef([]); // snapshots: { words, phones, customTiers }
   const redoStackRef = useRef([]); //snapshot for redo
-  const [undoCount, setUndoCount] = useState(0);
   const [redoCount, setRedoCount] = useState(0);
   const hoverEdgeRef     = useRef(null); // { id, tierId, side: 'left'|'right' } for cursor feedback
   const selectedTilesRef = useRef(new Map()); // id → { id, tierId } — multi-selected tiles in edit mode
@@ -834,7 +1237,6 @@ export default function App() {
   // ── Canvas element refs ───────────────────────────────────────────────
   const waveCanvasRef    = useRef(null);
   const specCanvasRef    = useRef(null);
-  const freqAxisCanvasRef = useRef(null);
   const rulerCanvasRef   = useRef(null);
   const wordsCanvasRef   = useRef(null);
   const phonesCanvasRef  = useRef(null);
@@ -882,84 +1284,76 @@ export default function App() {
   }, []);
 
   // ── Selection helpers ─────────────────────────────────────────────────
-  // Sync selectedTilesRef → React state for re-renders (border + highlight)
+  // Sync selectedTilesRef → React state for re-renders (tier border highlight;
+  // tile highlighting itself reads selectedTilesRef directly in drawTier, this
+  // state exists only to force the re-render)
   const syncSelectionState = useCallback(() => {
-    const ids = new Set(selectedTilesRef.current.keys());
     const tids = new Set([...selectedTilesRef.current.values()].map(e => e.tierId));
-    setSelectedTileIds(ids);
     setSelectedTierIds(tids);
   }, []);
 
   const clearSelection = useCallback(() => {
     selectedTilesRef.current.clear();
-    setSelectedTileIds(new Set());
     setSelectedTierIds(new Set());
   }, []);
 
   // ── Undo ──────────────────────────────────────────────────────────────
+  // Snapshots include wordsTierName/phonesTierName alongside the tier data itself,
+  // so a "use this tier as Words/Phones" swap (promoteTierToRole) is undoable just
+  // like any other edit — undoing it must restore not just the item arrays but also
+  // which tier's name was playing each role.
+  const snapshotState = useCallback(() => ({
+    words:  wordsRef.current.map(it => ({ ...it })),
+    phones: phonesRef.current.map(it => ({ ...it })),
+    customTiers: customTiersRef.current.map(t => ({ ...t, items: t.items.map(i => ({ ...i })) })),
+    wordsTierName: wordsTierNameRef.current,
+    phonesTierName: phonesTierNameRef.current,
+  }), []);
+
+  // Restores refs + state from a snapshot (popUndo/popRedo differ only in which
+  // stack they push the pre-restore state onto and pop the snapshot from).
+  const applySnapshot = useCallback((snap) => {
+    wordsRef.current  = snap.words;
+    phonesRef.current = snap.phones;
+    customTiersRef.current = snap.customTiers || [];
+    wordsTierNameRef.current = snap.wordsTierName ?? 'words';
+    phonesTierNameRef.current = snap.phonesTierName ?? 'phones';
+    setWords([...snap.words]);
+    setPhones([...snap.phones]);
+    setCustomTiers([...(snap.customTiers || [])]);
+    setWordsTierName(wordsTierNameRef.current);
+    setPhonesTierName(phonesTierNameRef.current);
+    const current = serializeTextGrid(
+      durationRef.current, snap.words, snap.phones, snap.customTiers || [],
+      false, wordsTierNameRef.current, phonesTierNameRef.current,
+    );
+    setIsDirty(current !== savedTextGridRef.current);
+  }, []);
+
   const pushUndo = useCallback(() => {
-    undoStackRef.current.push({
-      words:  wordsRef.current.map(it => ({ ...it })),
-      phones: phonesRef.current.map(it => ({ ...it })),
-      customTiers: customTiersRef.current.map(t => ({ ...t, items: t.items.map(i => ({ ...i })) })),
-    });
+    undoStackRef.current.push(snapshotState());
     if (undoStackRef.current.length > 100) undoStackRef.current.shift();
     redoStackRef.current = []; // a new edit invalidates the redo history
-    setUndoCount(undoStackRef.current.length);
     setRedoCount(0);
     setIsDirty(true);
-  }, []);
+  }, [snapshotState]);
 
   const popUndo = useCallback(() => {
     const snap = undoStackRef.current.pop();
     if (!snap) return;
-    // save current state to the redo stack before restoring
-    redoStackRef.current.push({
-      words:  wordsRef.current.map(it => ({ ...it })),
-      phones: phonesRef.current.map(it => ({ ...it })),
-      customTiers: customTiersRef.current.map(t => ({ ...t, items: t.items.map(i => ({ ...i })) })),
-    });
-    wordsRef.current  = snap.words;
-    phonesRef.current = snap.phones;
-    customTiersRef.current = snap.customTiers || [];
-    setWords([...snap.words]);
-    setPhones([...snap.phones]);
-    setCustomTiers([...(snap.customTiers || [])]);
-    setUndoCount(undoStackRef.current.length);
+    redoStackRef.current.push(snapshotState()); // save current state to the redo stack before restoring
+    applySnapshot(snap);
     setRedoCount(redoStackRef.current.length);
-    const current = serializeTextGrid(durationRef.current, snap.words, snap.phones, snap.customTiers || []);
-    setIsDirty(current !== savedTextGridRef.current);
-  }, []);
+  }, [snapshotState, applySnapshot]);
 
   const popRedo = useCallback(() => {
     const snap = redoStackRef.current.pop();
     if (!snap) return;
-    // save current state to the undo stack before restoring
-    undoStackRef.current.push({
-      words:  wordsRef.current.map(it => ({ ...it })),
-      phones: phonesRef.current.map(it => ({ ...it })),
-      customTiers: customTiersRef.current.map(t => ({ ...t, items: t.items.map(i => ({ ...i })) })),
-    });
-    wordsRef.current  = snap.words;
-    phonesRef.current = snap.phones;
-    customTiersRef.current = snap.customTiers || [];
-    setWords([...snap.words]);
-    setPhones([...snap.phones]);
-    setCustomTiers([...(snap.customTiers || [])]);
-    setUndoCount(undoStackRef.current.length);
+    undoStackRef.current.push(snapshotState()); // save current state to the undo stack before restoring
+    applySnapshot(snap);
     setRedoCount(redoStackRef.current.length);
-    const current = serializeTextGrid(durationRef.current, snap.words, snap.phones, snap.customTiers || []);
-    setIsDirty(current !== savedTextGridRef.current);
-  }, []);
+  }, [snapshotState, applySnapshot]);
   // ── Draw helpers ──────────────────────────────────────────────────────
-
-  const drawPlayheadLine = useCallback((ctx, w, h) => {
-    if (playingRef.current) return;
-    const px = tX(playheadRef.current, w);
-    if (px < 0 || px > w) return;
-    ctx.strokeStyle = '#e05a3a'; ctx.lineWidth = 1.5;
-    ctx.beginPath(); ctx.moveTo(px, 0); ctx.lineTo(px, h); ctx.stroke();
-  }, [tX]);
 
   const drawSelectionRect = useCallback((ctx, w, h, alpha = 0.15) => {
     const sel = selectionRef.current;
@@ -977,11 +1371,12 @@ export default function App() {
     const { ctx, w, h } = s;
     const { t0, t1 } = viewRef.current;
     const DUR = durationRef.current;
-    ctx.fillStyle = themeRef.current === 'light' ? '#ffffff' : '#0d0d10'; ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = themeRef.current === 'light' ? '#ffffff' : '#070b0f'; ctx.fillRect(0, 0, w, h);
     drawSelectionRect(ctx, w, h, 0.15);
     const mid = h / 2;
 
-    ctx.strokeStyle = 'rgba(255,255,255,0.06)'; ctx.lineWidth = 1;
+    ctx.strokeStyle = themeRef.current === 'light' ? 'rgba(20,24,32,0.12)' : 'rgba(255,255,255,0.10)';
+    ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(0, mid); ctx.lineTo(w, mid); ctx.stroke();
 
     const rawCh = audioBufferRef.current ? audioBufferRef.current.getChannelData(0) : null;
@@ -1000,7 +1395,7 @@ export default function App() {
 
       const isLight = themeRef.current === 'light';
       if (rawCh && samplesPerPx <= 2) {
-        ctx.strokeStyle = isLight ? '#000000' : '#ffffff'; ctx.lineWidth = 1.5;
+        ctx.strokeStyle = isLight ? '#252a32' : '#e8eaee'; ctx.lineWidth = 1.35;
         ctx.beginPath();
         let started = false;
         const steps = Math.max(w, Math.ceil((t1 - t0) * rawLen / DUR));
@@ -1015,7 +1410,7 @@ export default function App() {
         if (samplesPerPx < 0.25) {
           const iA = Math.max(0, Math.floor((t0 / DUR) * rawLen));
           const iB = Math.min(rawLen - 1, Math.ceil((t1 / DUR) * rawLen));
-          ctx.fillStyle = isLight ? '#000000' : '#ffffff';
+          ctx.fillStyle = isLight ? '#252a32' : '#e8eaee';
           for (let i = iA; i <= iB; i++) {
             const t = (i / rawLen) * DUR;
             const x = ((t - t0) / (t1 - t0)) * w;
@@ -1024,7 +1419,15 @@ export default function App() {
           }
         }
       } else if (rawCh && samplesPerPx <= 200) {
-        ctx.fillStyle = isLight ? '#000000' : '#ffffff';
+        ctx.fillStyle = isLight ? '#252a32' : 'rgba(232,234,238,0.92)';
+        // Per-pixel-column peak magnitude, reusing the same mn/mx already computed for the
+        // min/max fill below (no extra sample scan needed). Smoothed afterward with a
+        // time-based moving average so it reads as a loudness "swell" contour rather than
+        // tracking every sample-to-sample fluctuation — an unsmoothed per-pixel envelope
+        // (even peak-based) still looked jagged/noisy, and a plain per-pixel RMS (the
+        // first attempt at this) was both jagged *and* too short relative to the actual
+        // peaks, since RMS is mathematically always <= peak.
+        const envPerCol = envelopeVisibleRef.current ? new Float32Array(w) : null;
         for (let cx = 0; cx < w; cx++) {
           const tA = t0 + (cx / w) * (t1 - t0);
           const tB = t0 + ((cx + 1) / w) * (t1 - t0);
@@ -1039,25 +1442,45 @@ export default function App() {
           const yTop = mid - mx * gain * mid;
           const yBot = mid - mn * gain * mid;
           ctx.fillRect(cx, yTop, 1, Math.max(1, yBot - yTop));
+          if (envPerCol) envPerCol[cx] = Math.max(mx, -mn);
         }
-        const rms = rmsEnvRef.current;
-        if (rms) {
-          ctx.strokeStyle = isLight ? 'rgba(0,0,0,0.6)' : 'rgba(255,255,255,0.6)'; ctx.lineWidth = 1.2;
-          for (const sign of [-1, 1]) {
-            ctx.beginPath(); let started = false;
-            for (let cx = 0; cx < w; cx++) {
-              const t = t0 + (cx / w) * (t1 - t0);
-              const fr = Math.max(0, Math.min(rms.frames - 1, Math.floor((t / DUR) * rms.frames)));
-              const y = mid + sign * (rms.env[fr] || 0) * gain * mid;
-              if (!started) { ctx.moveTo(cx, y); started = true; } else ctx.lineTo(cx, y);
-            }
-            ctx.stroke();
+        if (envPerCol) {
+          // Box-filter moving average over a fixed ~30ms window (converted to pixels for
+          // the current zoom via pxPerSec), computed with a prefix sum so it's O(w)
+          // regardless of window size.
+          const pxPerSec = w / (t1 - t0);
+          const smoothPx = Math.max(1, Math.round(0.03 * pxPerSec));
+          const prefix = new Float32Array(w + 1);
+          for (let i = 0; i < w; i++) prefix[i + 1] = prefix[i] + envPerCol[i];
+          const half = Math.floor(smoothPx / 2);
+          // Envelope-only amplitude multiplier (edit this to make the overlay taller/
+          // shorter) — applied on top of the waveform's own `gain`, and clamped to 1 so a
+          // sustained full-scale passage can't push the smoothed contour past the panel's
+          // own top/bottom edge.
+          const ENVELOPE_GAIN_BOOST = 2.0;
+          ctx.beginPath();
+          for (let cx = 0; cx < w; cx++) {
+            const a = Math.max(0, cx - half), b = Math.min(w - 1, cx + half);
+            const v = Math.min(1, ((prefix[b + 1] - prefix[a]) / (b - a + 1)) * ENVELOPE_GAIN_BOOST);
+            const y = mid - v * gain * mid;
+            if (cx === 0) ctx.moveTo(cx, y); else ctx.lineTo(cx, y);
           }
+          for (let cx = w - 1; cx >= 0; cx--) {
+            const a = Math.max(0, cx - half), b = Math.min(w - 1, cx + half);
+            const v = Math.min(1, ((prefix[b + 1] - prefix[a]) / (b - a + 1)) * ENVELOPE_GAIN_BOOST);
+            const y = mid + v * gain * mid;
+            ctx.lineTo(cx, y);
+          }
+          ctx.closePath();
+          ctx.fillStyle = isLight ? 'rgba(47,104,196,0.12)' : 'rgba(148,164,184,0.15)';
+          ctx.fill();
+          ctx.strokeStyle = isLight ? 'rgba(47,104,196,0.55)' : 'rgba(148,164,184,0.75)'; ctx.lineWidth = 1.2;
+          ctx.stroke();
         }
       } else {
         const peakData = data || new Float32Array(0);
         const N = peakData.length;
-        ctx.fillStyle = isLight ? '#000000' : '#ffffff';
+        ctx.fillStyle = isLight ? '#252a32' : 'rgba(232,234,238,0.92)';
         for (let cx = 0; cx < w; cx++) {
           const tA = t0 + (cx / w) * (t1 - t0);
           const idx = Math.max(0, Math.min(N - 1, Math.floor((tA / DUR) * N)));
@@ -1066,15 +1489,14 @@ export default function App() {
         }
       }
     }
-    drawPlayheadLine(ctx, w, h);
-  }, [tX, drawSelectionRect, drawPlayheadLine]);
+  }, [tX, drawSelectionRect]);
 
   const drawSpec = useCallback(() => {
     const s = setupCanvas(specCanvasRef.current);
     if (!s) return;
     const { ctx, w, h } = s;
     const { t0, t1 } = viewRef.current;
-    ctx.fillStyle = '#090910'; ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = '#06090d'; ctx.fillRect(0, 0, w, h);
     const sp = spectroRef.current;
     const dpr = window.devicePixelRatio || 1;
     const pw = Math.round(w * dpr);
@@ -1104,7 +1526,7 @@ export default function App() {
       blitStrip(base);
     } else if (!sp) {
       // No spectrogram data at all — show hint
-      ctx.fillStyle = '#3a3a4a';
+      ctx.fillStyle = '#657082';
       ctx.font = '13px Inter,sans-serif';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
@@ -1116,20 +1538,47 @@ export default function App() {
     {
       const ft = formantTrackRef.current;
       const fv = formantVisibleRef.current;
-      if (ft && Array.isArray(ft.times) && (fv.f1 || fv.f2 || fv.f3)) {
+      if (ft && Array.isArray(ft.times) && (fv.f0 || fv.f1 || fv.f2 || fv.f3)) {
         const FMAX = Math.min(8000, ft.sr / 2);
         const melMax = 2595 * Math.log10(1 + FMAX / 700);
         const hzToMelY = (hz) => h - (2595 * Math.log10(1 + hz / 700) / melMax) * h;
+
+        // F0 (pitch) is drawn as a connected line — the conventional way to show a
+        // pitch contour (matches Praat's own Sound+Pitch view) — broken into separate
+        // subpaths at each unvoiced frame (hz=0) so voicing gaps don't get bridged by
+        // a straight line. This uses its own frame grid (`ft.timesF0`), independent of
+        // the formant frames' `times` below — see the pitch-tracking writeup in
+        // HANDOFF.md for why "To Pitch" and "To Formant (burg)" don't share a grid.
+        if (fv.f0 && ft.f0 && ft.timesF0) {
+          ctx.strokeStyle = 'rgba(240,200,40,0.9)';
+          ctx.lineWidth = 2;
+          let drawing = false;
+          for (let i = 0; i < ft.timesF0.length; i++) {
+            const t = ft.timesF0[i];
+            if (t < t0 || t > t1) continue;
+            const hz = ft.f0[i];
+            if (!hz) { // 0 = unvoiced — end the current segment, if any
+              if (drawing) { ctx.stroke(); drawing = false; }
+              continue;
+            }
+            const x = tX(t, w);
+            const y = hzToMelY(hz);
+            if (!drawing) { ctx.beginPath(); ctx.moveTo(x, y); drawing = true; }
+            else { ctx.lineTo(x, y); }
+          }
+          if (drawing) ctx.stroke();
+        }
+
+        // F1/F2/F3 stay as a Praat-style scatter: one dot per actual analysis frame
+        // (not one per pixel column) — draws only the frames that fall in the current
+        // view, so dots naturally thin out when zoomed in and cluster when zoomed out,
+        // matching Praat's own formant-track rendering instead of interpolating a line.
         const DOT_R = 3;
         const formants = [
           ['f1', ft.f1, 'rgba(255,80,80,0.85)'],
           ['f2', ft.f2, 'rgba(80,220,80,0.85)'],
           ['f3', ft.f3, 'rgba(80,140,255,0.85)'],
         ];
-        // Praat-style scatter: one dot per actual analysis frame (not one per pixel
-        // column) — draws only the frames that fall in the current view, so dots
-        // naturally thin out when zoomed in and cluster when zoomed out, matching
-        // Praat's own formant-track rendering instead of interpolating a line.
         for (const [key, fdata, color] of formants) {
           if (!fv[key] || !fdata) continue;
           ctx.fillStyle = color;
@@ -1147,48 +1596,37 @@ export default function App() {
         }
       }
     }
-    // Frequency axis labels — color chosen to contrast against each colormap's background
-    const labelColor = { jet: '#000000', inferno: '#ffffff', viridis: '#ffffff', greys: '#000000' }[colormapNameRef.current] ?? '#ffffff';
-    const shadowColor = { jet: '#ffffff', inferno: '#000000', viridis: '#000020', greys: '#ffffff' }[colormapNameRef.current] ?? '#000000';
-    const FMAX = 8000;
-    const melMax = 2595 * Math.log10(1 + FMAX / 700);
-    const ticks = [100, 200, 500, 1000, 2000, 4000, 8000];
-    ctx.font = "9px 'JetBrains Mono',monospace";
-    ctx.textAlign = 'left';
-    for (const hz of ticks) {
-      const melHz = 2595 * Math.log10(1 + hz / 700);
-      const y = Math.round(h - (melHz / melMax) * h) + 0.5;
-      ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+    // Keep only quiet frequency guides in the plot; labels live in the shared gutter.
+    for (const { position } of SPEC_AXIS_TICKS) {
+      const y = Math.round((position / 100) * h) + 0.5;
+      ctx.strokeStyle = 'rgba(255,255,255,0.035)';
       ctx.lineWidth = 1;
       ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
-      const label = hz >= 1000 ? `${hz / 1000}k` : `${hz}`;
-      ctx.shadowColor = shadowColor; ctx.shadowBlur = 3;
-      ctx.fillStyle = labelColor;
-      ctx.fillText(label, 3, Math.max(9, y - 2));
-      ctx.shadowBlur = 0;
     }
-
-    drawPlayheadLine(ctx, w, h);
-  }, [drawSelectionRect, drawPlayheadLine, tX]);
+  }, [drawSelectionRect, tX]);
 
   const drawRuler = useCallback(() => {
     const s = setupCanvas(rulerCanvasRef.current);
     if (!s) return;
     const { ctx, w, h } = s;
     const { t0, t1 } = viewRef.current;
-    ctx.fillStyle = themeRef.current === 'light' ? '#ffffff' : '#13131a'; ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = themeRef.current === 'light' ? '#ffffff' : '#0d1015'; ctx.fillRect(0, 0, w, h);
     const span = t1 - t0, pxPerSec = w / span;
-    const steps = [0.1, 0.25, 0.5, 1, 2, 5, 10, 30];
-    const step = steps.find(st => st * pxPerSec >= 70) || 30;
+    const steps = [0.25, 0.5, 1, 2, 5, 10, 30, 60];
+    const step = steps.find(st => st * pxPerSec >= 125) || 60;
     const first = Math.ceil(t0 / step) * step;
-    ctx.fillStyle = '#45454d'; ctx.font = "9px 'JetBrains Mono',monospace"; ctx.textAlign = 'center';
-    ctx.strokeStyle = '#2a2a30'; ctx.lineWidth = 1;
+    ctx.fillStyle = themeRef.current === 'light' ? '#5f6874' : '#858b96';
+    ctx.font = "10px 'JetBrains Mono',monospace"; ctx.textAlign = 'center';
     for (let t = first; t <= t1 + step; t = +(t + step).toFixed(6)) {
       const x = Math.round(tX(t, w));
-      ctx.beginPath(); ctx.moveTo(x, h - 6); ctx.lineTo(x, h); ctx.stroke();
-      const label = t >= 60
-        ? `${Math.floor(t / 60)}:${String(Math.round(t % 60)).padStart(2, '0')}`
-        : `${step < 1 ? t.toFixed(1) : Math.round(t)}s`;
+      let label;
+      if (t >= 60) {
+        const precision = step < 0.5 ? 2 : step < 1 ? 1 : 0;
+        const seconds = (t % 60).toFixed(precision).padStart(precision ? 3 + precision : 2, '0');
+        label = `${Math.floor(t / 60)}:${seconds}`;
+      } else {
+        label = `${step < 0.5 ? t.toFixed(2) : step < 1 ? t.toFixed(1) : Math.round(t)}s`;
+      }
       ctx.fillText(label, x, h - 8);
     }
   }, [tX]);
@@ -1198,7 +1636,7 @@ export default function App() {
     if (!s) return;
     const { ctx, w, h } = s;
     const { t0, t1 } = viewRef.current;
-    ctx.fillStyle = themeRef.current === 'light' ? '#ffffff' : '#13131a'; ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = themeRef.current === 'light' ? '#ffffff' : '#0d1015'; ctx.fillRect(0, 0, w, h);
     const sel = selectionRef.current;
     if (sel) {
       const sx = tX(sel.t0, w), ex = tX(sel.t1, w);
@@ -1206,16 +1644,37 @@ export default function App() {
       ctx.fillRect(sx, 0, ex - sx, h);
     }
 
-    const numRows = Math.max(1, ...items.map(it => (it.row ?? 0) + 1));
+    const numRows = visibleRowCount(items, t0, t1);
     const rowH = h / numRows;
     const inEdit = editModeRef.current;
-    const fillColor   = isWord ? 'rgba(58,123,213,0.18)'  : 'rgba(170,130,220,0.15)';
-    const strokeColor = isWord ? 'rgba(58,123,213,0.45)'  : 'rgba(170,130,220,0.4)';
-    const editFill    = isWord ? 'rgba(58,123,213,0.30)'  : 'rgba(170,130,220,0.28)';
-    const fontSize    = Math.round(Math.max(11, Math.min(24, rowH * 0.45)) * fontScaleRef.current);
+    const isDark = themeRef.current !== 'light';
+    // Default tier chrome (no score / not edited). Selection brightens these same RGBs
+    // rather than swapping to a fixed accent color.
+    const defaultRgb  = DEFAULT_TILE_RGB;
+    const maxFontSize = isWord ? 20 : 18;
+    const fontSize    = Math.round(Math.max(11, Math.min(maxFontSize, rowH * 0.34)) * fontScaleRef.current);
     const font        = isWord ? `500 ${fontSize}px Inter,sans-serif` : `${Math.max(10, fontSize - 1)}px 'JetBrains Mono',monospace`;
     const hoverEdge   = hoverEdgeRef.current;
     const selTiles    = selectedTilesRef.current;
+    const adjacencyById = new Map();
+    const itemsByRow = new Map();
+    for (const item of items) {
+      const row = item.row ?? 0;
+      if (!itemsByRow.has(row)) itemsByRow.set(row, []);
+      itemsByRow.get(row).push(item);
+    }
+    for (const rowItems of itemsByRow.values()) {
+      rowItems.sort((a, b) => a.t0 - b.t0 || a.t1 - b.t1);
+      for (let i = 0; i < rowItems.length; i++) {
+        const item = rowItems[i];
+        const prev = rowItems[i - 1];
+        const next = rowItems[i + 1];
+        adjacencyById.set(item.id, {
+          joinsLeft: Boolean(prev && Math.abs(prev.t1 - item.t0) <= 1e-5),
+          joinsRight: Boolean(next && Math.abs(item.t1 - next.t0) <= 1e-5),
+        });
+      }
+    }
 
     for (const item of items) {
       if (item.t1 < t0 || item.t0 > t1) continue;
@@ -1230,41 +1689,75 @@ export default function App() {
       const hasScore = isWord && item.score != null;
       const isEdited   = isWord && item.edited;
       const isPerfectScore = hasScore && item.score === 1;
-      const fill   = isSelected ? (isWord ? 'rgba(58,123,213,0.55)' : 'rgba(170,130,220,0.50)')
-                   : isEdited   ? `rgba(${EDITED_GREEN.join(',')},${inEdit ? 0.40 : 0.28})`
-                   : isPerfectScore ? `rgba(${SCORE_ONE_GREEN.join(',')},${inEdit ? 0.40 : 0.28})`
-                   : hasScore   ? scoreColor(item.score, inEdit ? 0.40 : 0.28)
-                   :              (inEdit ? editFill : fillColor);
-      const stroke = isSelected ? (isWord ? '#7aacf0' : '#aa82dc')
-                   : isEdited   ? `rgb(${EDITED_GREEN.join(',')})`
-                   : isPerfectScore ? `rgb(${SCORE_ONE_GREEN.join(',')})`
-                   : hasScore   ? scoreColor(item.score, 0.75)
-                   :              strokeColor;
+
+      // Keep the tile's own hue; selection only boosts fill alpha + stroke weight.
+      let rgb;
+      let kind; // 'default' | 'scored' | 'solid' (edited / perfect — full stroke when unselected)
+      if (isEdited) { rgb = EDITED_GREEN; kind = 'solid'; }
+      else if (isPerfectScore) { rgb = SCORE_ONE_GREEN; kind = 'solid'; }
+      else if (hasScore) { rgb = scoreColorRgb(item.score); kind = 'scored'; }
+      else { rgb = defaultRgb; kind = 'default'; }
+
+      let fillAlpha;
+      let strokeAlpha;
+      if (isDark) {
+        fillAlpha = isSelected ? 0.92 : (inEdit ? 0.82 : 0.78);
+        strokeAlpha = isSelected ? 0.98 : 0.84;
+      } else if (kind === 'default') {
+        fillAlpha = isSelected ? 0.56 : (inEdit ? (isWord ? 0.28 : 0.26) : (isWord ? 0.24 : 0.22));
+        strokeAlpha = isSelected ? 0.82 : (isWord ? 0.38 : 0.34);
+      } else {
+        fillAlpha = isSelected ? 0.60 : (inEdit ? 0.32 : 0.26);
+        strokeAlpha = (isSelected || kind === 'solid') ? 0.82 : 0.44;
+      }
+      const paintRgb = isDark ? lightenRgb(rgb, 0.38) : rgb;
+      const fill = rgbaFromRgb(paintRgb, fillAlpha);
+      const stroke = rgbaFromRgb(paintRgb, strokeAlpha);
+      const tilePadY = Math.max(8, Math.min(22, rowH * 0.22));
+      // Fixed, not scaled by bw: cross-tier snapping/drag-guide lines land at the exact
+      // same pixel on every tier's canvas (drawSnapGuide uses the same tX(t, w)), so a
+      // width-dependent pad here would put each tier's visible edge a different distance
+      // from that shared line even when their timestamps are perfectly snapped/aligned —
+      // word tiles (wide) used to sit ~4px off while phoneme tiles (narrow) sat ~2px off.
+      const exposedPadX = 1.5;
+      const { joinsLeft = false, joinsRight = false } = adjacencyById.get(item.id) || {};
+      const leftPadX = joinsLeft ? 0 : exposedPadX;
+      const rightPadX = joinsRight ? 0 : exposedPadX;
+      const tileH = Math.max(1, rowH - tilePadY * 2);
+      const tileX = x0 + leftPadX;
+      const tileY = ry + tilePadY;
+      const tileW = Math.max(0, bw - leftPadX - rightPadX);
+      if (tileW <= 0 || tileH <= 0) continue;
+      const radius = Math.min(5, Math.max(2, tileH * 0.12));
       ctx.fillStyle = fill;
-      ctx.fillRect(x0, ry + 2, bw, rowH - 4);
+      roundedRect(ctx, tileX, tileY, tileW, tileH, radius, !joinsLeft, !joinsRight);
+      ctx.fill();
       ctx.strokeStyle = stroke; ctx.lineWidth = isSelected ? 2 : (inEdit ? 1.5 : 1);
-      ctx.strokeRect(x0 + 0.5, ry + 2.5, bw - 1, rowH - 5);
+      roundedRect(
+        ctx, tileX + 0.5, tileY + 0.5,
+        Math.max(0, tileW - 1), Math.max(0, tileH - 1),
+        radius, !joinsLeft, !joinsRight,
+      );
+      ctx.stroke();
 
       if (inEdit) {
         const isHovered = hoverEdge && hoverEdge.id === item.id;
         if (isHovered) {
           const hx = hoverEdge.side === 'left' ? x0 : x1;
           ctx.strokeStyle = '#f0c040'; ctx.lineWidth = 2.5;
-          ctx.beginPath(); ctx.moveTo(hx, ry + 2); ctx.lineTo(hx, ry + rowH - 2); ctx.stroke();
-          ctx.strokeStyle = strokeColor; ctx.lineWidth = 1.5;
+          ctx.beginPath(); ctx.moveTo(hx, ry + tilePadY); ctx.lineTo(hx, ry + rowH - tilePadY); ctx.stroke();
         }
       }
 
       if (bw > 8) {
         ctx.save();
         ctx.beginPath(); ctx.rect(x0 + 1, ry, bw - 2, rowH); ctx.clip();
-        ctx.fillStyle = themeRef.current === 'light' ? '#1c1c20' : '#c8c6c1'; ctx.font = font; ctx.textAlign = 'center';
+        ctx.fillStyle = themeRef.current === 'light' ? '#1c1c20' : '#05070a'; ctx.font = font; ctx.textAlign = 'center';
         ctx.fillText(item.text, (x0 + x1) / 2, ry + rowH / 2 + fontSize * 0.35);
         ctx.restore();
       }
     }
-    drawPlayheadLine(ctx, w, h);
-  }, [tX, drawPlayheadLine]);
+  }, [tX]);
 
   const drawMinimap = useCallback(() => {
     const s = setupCanvas(minimapCanvasRef.current);
@@ -1273,7 +1766,7 @@ export default function App() {
     const DUR = durationRef.current;
     const { t0, t1 } = viewRef.current;
     const isLight = themeRef.current === 'light';
-    ctx.fillStyle = isLight ? '#ffffff' : '#0c0c0f'; ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = isLight ? '#ffffff' : '#080b0f'; ctx.fillRect(0, 0, w, h);
     for (const wd of wordsRef.current) {
       ctx.fillStyle = wd.edited ? `rgba(${EDITED_GREEN.join(',')},0.55)`
                     : wd.score === 1 ? `rgba(${SCORE_ONE_GREEN.join(',')},0.55)`
@@ -1282,10 +1775,10 @@ export default function App() {
     }
     const vx0 = (t0 / DUR) * w, vx1 = (t1 / DUR) * w;
     ctx.fillStyle = isLight ? 'rgba(0,0,0,0.06)' : 'rgba(255,255,255,0.06)'; ctx.fillRect(vx0, 0, vx1 - vx0, h);
-    ctx.strokeStyle = '#45454d'; ctx.lineWidth = 1;
+    ctx.strokeStyle = isLight ? '#a6adba' : '#6f7784'; ctx.lineWidth = 1.2;
     ctx.strokeRect(vx0 + 0.5, 0.5, vx1 - vx0 - 1, h - 1);
     const px = (playheadRef.current / DUR) * w;
-    ctx.strokeStyle = '#e05a3a'; ctx.lineWidth = 1.5;
+    ctx.strokeStyle = '#3a7bd5'; ctx.lineWidth = 1.5;
     ctx.beginPath(); ctx.moveTo(px, 0); ctx.lineTo(px, h); ctx.stroke();
   }, []);
 
@@ -1295,18 +1788,24 @@ export default function App() {
     const { ctx, w, h } = s;
     const DUR = durationRef.current;
     const { t0, t1 } = viewRef.current;
-    ctx.fillStyle = themeRef.current === 'light' ? '#ffffff' : '#0c0c0f'; ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = themeRef.current === 'light' ? '#ffffff' : '#080b0f'; ctx.fillRect(0, 0, w, h);
     if (!DUR) return;
     const vx0 = (t0 / DUR) * w, vx1 = (t1 / DUR) * w;
-    ctx.fillStyle = '#3a3a42';
-    ctx.fillRect(Math.max(0, vx0), 2, Math.max(4, vx1 - vx0), h - 4);
+    ctx.fillStyle = themeRef.current === 'light' ? '#a9b0bc' : '#626b77';
+    ctx.fillRect(Math.max(0, vx0), 1, Math.max(4, vx1 - vx0), Math.max(1, h - 2));
   }, []);
 
+  // The playhead's single source of truth, regardless of play state — always shows a
+  // top-anchored handle + time badge (2026-08-18, replacing the old plain 1.5px line and
+  // the separate playing/paused split, where paused state was drawn per-panel via a now-
+  // removed drawPlayheadLine special case). Anchoring the badge to the handle at the top
+  // (rather than the bottom, as in the reference design this was modeled on) keeps both
+  // pieces together and unaffected by how tall the tiers area is resized to.
   const drawOverlay = useCallback(() => {
     const ov = overlayCanvasRef.current;
     const tl = timelineRef.current;
     if (!ov || !tl) return;
-    const GUTTER = 56;
+    const GUTTER = TIMELINE_GUTTER;
     const dpr = window.devicePixelRatio || 1;
     const tw = tl.offsetWidth, th = tl.offsetHeight;
     if (ov.width !== Math.round(tw * dpr) || ov.height !== Math.round(th * dpr)) {
@@ -1319,16 +1818,48 @@ export default function App() {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, tw, th);
     const px = GUTTER + tX(playheadRef.current, tw - GUTTER);
-    if (px >= GUTTER && px <= tw) {
-      ctx.strokeStyle = '#e05a3a'; ctx.lineWidth = 1.5;
-      ctx.beginPath(); ctx.moveTo(px, 0); ctx.lineTo(px, th); ctx.stroke();
-    }
-  }, [tX]);
+    if (px < GUTTER || px > tw) return;
 
-  const clearOverlay = useCallback(() => {
-    const ov = overlayCanvasRef.current;
-    if (ov) ov.getContext('2d').clearRect(0, 0, ov.width, ov.height);
-  }, []);
+    const COLOR = '#3a7bd5';
+    const HANDLE_R = 5;
+
+    // Line — starts below the handle so the handle reads as a distinct cap rather than
+    // a lump sitting on top of the line.
+    ctx.strokeStyle = 'rgba(58,123,213,0.62)'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(px, HANDLE_R * 2); ctx.lineTo(px, th); ctx.stroke();
+
+    // Handle — filled circle pinned to the very top of the timeline (y=0), so it's
+    // always fully visible no matter how the waveform/spectrogram/tiers split is sized.
+    ctx.fillStyle = COLOR;
+    ctx.beginPath(); ctx.arc(px, HANDLE_R, HANDLE_R, 0, Math.PI * 2); ctx.fill();
+
+    // Time badge — rounded pill showing the exact playhead position to millisecond
+    // precision (fmtTime already formats this way for the toolbar's own time display,
+    // so the two stay visually consistent). Vertically centered in the gap between the
+    // spectrogram panel and the tiers area (not pinned under the handle) — measured live
+    // via panelsDivRef/tiersDivRef so it stays correctly placed as that split is resized.
+    const label = fmtTime(playheadRef.current);
+    ctx.font = "11px 'JetBrains Mono',monospace";
+    const padX = 6, badgeH = 16;
+    const badgeW = ctx.measureText(label).width + padX * 2;
+    let badgeY = HANDLE_R * 2 + 4; // fallback: near the top, under the handle
+    if (panelsDivRef.current && tiersDivRef.current) {
+      const tlTop = tl.getBoundingClientRect().top;
+      const panelsBottom = panelsDivRef.current.getBoundingClientRect().bottom - tlTop;
+      const tiersTop = tiersDivRef.current.getBoundingClientRect().top - tlTop;
+      badgeY = (panelsBottom + tiersTop) / 2 - badgeH / 2;
+    }
+    // Clamp horizontally so the badge never overflows the left/right edge of the
+    // timeline even when the handle itself is near an edge.
+    const badgeX = Math.max(GUTTER, Math.min(tw - badgeW, px - badgeW / 2));
+    ctx.fillStyle = COLOR;
+    ctx.beginPath();
+    ctx.roundRect(badgeX, badgeY, badgeW, badgeH, badgeH / 2);
+    ctx.fill();
+    ctx.fillStyle = '#ffffff';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(label, badgeX + badgeW / 2, badgeY + badgeH / 2 + 0.5);
+  }, [tX]);
 
   const redraw = useCallback(() => {
     drawWave(); drawSpec(); drawRuler();
@@ -1340,8 +1871,21 @@ export default function App() {
     }
     drawMinimap();
     drawScrollbar();
+    drawOverlay();
     scheduleSpecPrefetchRef.current();
-  }, [drawWave, drawSpec, drawRuler, drawTier, drawMinimap, drawScrollbar]);
+  }, [drawWave, drawSpec, drawRuler, drawTier, drawMinimap, drawScrollbar, drawOverlay]);
+
+  // Flips editModeRef (and its useState twin, which exists only to force a re-render)
+  // between editable and locked/view-only. Shared by the `1` keydown handler and the
+  // toolbar lock icon so keyboard and mouse go through one place instead of duplicating
+  // the flip/clear-selection/redraw sequence.
+  const toggleEditMode = useCallback(() => {
+    const n = !editModeRef.current;
+    editModeRef.current = n;
+    setEditMode(n);
+    if (!n) clearSelection(); // clear selection when locking (leaving edit mode)
+    redraw();
+  }, [clearSelection, redraw]);
 
   // dir: +1 (zoom in) or -1 (zoom out). Only drawWave() needs to rerun — this is the
   // one control in the app that provably affects only the waveform canvas.
@@ -1362,14 +1906,6 @@ export default function App() {
     formantVisibleRef.current = next;
     setFormantVisible(next);
     drawSpec(); // only the spectrogram canvas draws formant dots
-  }, [drawSpec]);
-
-  const toggleAllFormants = useCallback(() => {
-    const allOn = formantVisibleRef.current.f1 && formantVisibleRef.current.f2 && formantVisibleRef.current.f3;
-    const next = { f1: !allOn, f2: !allOn, f3: !allOn };
-    formantVisibleRef.current = next;
-    setFormantVisible(next);
-    drawSpec();
   }, [drawSpec]);
 
   // Returns all tier items as { id, items } excluding the given set of tier ids
@@ -1615,8 +2151,13 @@ export default function App() {
 
   useEffect(() => { scheduleSpecPrefetchRef.current = scheduleSpecPrefetch; }, [scheduleSpecPrefetch]);
 
-  const calcFormantForView = useCallback(async () => {
-    if (!audioBufferRef.current || !publicWavFileRef.current) return;
+  // Fetches formants + pitch for the current view into formantTrackRef, with no
+  // visibility side effects — shared by calcFormantForView (explicit "Regenerate",
+  // which does want to flip visibility) and toggleSpecTrack (a checkbox click, which
+  // should only ever affect the one track the user clicked). Returns whether it fetched
+  // successfully, so callers can bail out on failure without duplicating the try/catch.
+  const fetchFormantData = useCallback(async () => {
+    if (!audioBufferRef.current || !publicWavFileRef.current) return false;
     setFormantComputing(true);
     const { t0, t1 } = viewRef.current;
     try {
@@ -1629,6 +2170,7 @@ export default function App() {
           colormap: colormapNameRef.current,
           kind: 'formants', // server skips spectrogram computation entirely — see below
         }),
+        signal: AbortSignal.timeout(SPEC_FETCH_TIMEOUT_MS),
       });
       const data = await res.json();
       if (data.error) throw new Error(data.error);
@@ -1638,21 +2180,40 @@ export default function App() {
       // already keeps spectroCacheRef populated; overwriting it with this request's
       // un-widened, un-scaled strip would clobber a wider prefetched buffer, so this
       // request never asks the server to compute one in the first place.
-
-      // If the user had toggled every formant off, a fresh generate should show them again.
-      const fv = formantVisibleRef.current;
-      if (!fv.f1 && !fv.f2 && !fv.f3) {
-        const next = { f1: true, f2: true, f3: true };
-        formantVisibleRef.current = next;
-        setFormantVisible(next);
-      }
-      drawSpec();
+      return true;
     } catch (e) {
-      console.error('[calcFormantForView]', e);
+      console.error('[fetchFormantData]', e);
+      return false;
     } finally {
       setFormantComputing(false);
     }
-  }, [drawSpec]);
+  }, []);
+
+  // "Regenerate formants & pitch" (spectrogram context menu) — always re-fetches
+  // for the current view and shows every track, regardless of prior toggle state.
+  const calcFormantForView = useCallback(async () => {
+    const ok = await fetchFormantData();
+    if (!ok) return;
+    const next = { f0: true, f1: true, f2: true, f3: true };
+    formantVisibleRef.current = next;
+    setFormantVisible(next);
+    drawSpec();
+  }, [fetchFormantData, drawSpec]);
+
+  // A direct F0/F1/F2/F3 checkbox click. Checking a track on always re-fetches for
+  // the current view first — formantTrackRef may hold stale data from whatever view
+  // was on screen the last time anything was generated/regenerated, and silently
+  // showing that instead of re-running the right-click "Regenerate formants & pitch"
+  // menu item was the exact friction this replaces. Unchecking just hides that track,
+  // no fetch needed. Never forces any other track's visibility either way.
+  const toggleSpecTrack = useCallback(async (key) => {
+    const turningOn = !formantVisibleRef.current[key];
+    if (turningOn) {
+      const ok = await fetchFormantData();
+      if (!ok) return;
+    }
+    toggleFormant(key);
+  }, [fetchFormantData, toggleFormant]);
 
   // ── Audio context ─────────────────────────────────────────────────────
   const getAudioCtx = () => {
@@ -1679,10 +2240,9 @@ export default function App() {
   const stopPlay = useCallback(() => {
     stopAudio();
     setPlaying(false);
-    clearOverlay();
     updateTimeDisplay();
-    redraw();
-  }, [stopAudio, clearOverlay, redraw, updateTimeDisplay]);
+    redraw(); // redraws the playhead overlay at its paused position too — see drawOverlay
+  }, [stopAudio, redraw, updateTimeDisplay]);
 
   const tick = useCallback((gen) => {
     // Stale-generation guard: if startPlay has been called again since this
@@ -1716,6 +2276,10 @@ export default function App() {
       desiredT0 = Math.round(desiredT0 / tPerPx) * tPerPx;
       desiredT0 = Math.max(0, Math.min(DUR - span, desiredT0));
     }
+    // redraw() now draws the overlay itself (see its definition), so both branches below
+    // keep the playhead marker in sync every tick — previously only the `else` branch
+    // did, so once auto-scroll kicked in (past the view's center) the marker stopped
+    // being drawn at all for the rest of playback, not just for one frame.
     if (playheadRef.current > t0 + half && Math.abs(desiredT0 - t0) > 1e-6) {
       viewRef.current = { t0: desiredT0, t1: desiredT0 + span };
       redraw();
@@ -1776,13 +2340,12 @@ export default function App() {
         if (loopModeRef.current && sel && playingRef.current) {
           setLoopToast(true);
           clearTimeout(loopToastTimerRef.current);
-          loopToastTimerRef.current = setTimeout(() => setLoopToast(false), 5000);
+          loopToastTimerRef.current = setTimeout(() => setLoopToast(false), 2000);
           startPlay(sel.t0);
           return;
         }
         stopAudio();
         setPlaying(false);
-        clearOverlay();
         updateTimeDisplay();
         redraw();
       };
@@ -1796,7 +2359,7 @@ export default function App() {
     } else {
       doStart();
     }
-  }, [stopAudio, tick, clearOverlay, drawOverlay, redraw, updateTimeDisplay]);
+  }, [stopAudio, tick, drawOverlay, redraw, updateTimeDisplay]);
 
   // ── Data loading ──────────────────────────────────────────────────────
 
@@ -1821,6 +2384,24 @@ export default function App() {
       // Y-zoom is relative to this file's own peak — a new file shouldn't inherit the
       // previous file's manual multiplier.
       yZoomRef.current = 1;
+      // Reset which tier plays the Words/Phones role — loadTextGrid (if a TextGrid
+      // accompanies this file) will overwrite these with whatever it actually finds;
+      // this covers the audio-only case so a stale name from the previous file isn't
+      // carried over.
+      wordsTierNameRef.current = 'words';   setWordsTierName('words');
+      phonesTierNameRef.current = 'phones'; setPhonesTierName('phones');
+      // This ref must only ever point at the wav actually backing the current
+      // AudioBuffer. loadPublicPair re-sets it right after this call resolves (for the
+      // public/ auto-load path); for any other source (drag-and-drop, or the More menu's
+      // Load Wav) it must stay null so calcSpecForView/calcFormantForView's guard clauses
+      // correctly no-op instead of sending DSP requests against a stale filename.
+      publicWavFileRef.current = null;
+      // "Don't ask me again" for the save-overwrite confirm is scoped to the file it
+      // was dismissed for, not a permanent global skip — otherwise dismissing it once
+      // on file A would silently skip the warning forever on every other file loaded
+      // afterward, including ones the user has never confirmed overwriting.
+      skipSaveConfirmRef.current = false;
+      try { localStorage.removeItem('skipSaveConfirm'); } catch (_) {}
     }
 
     audioBufferRef.current = buffer;
@@ -1844,7 +2425,6 @@ export default function App() {
     // partition the whole file — so this max-of-maxes is the exact full-file peak,
     // not an approximation, with no extra scan needed.
     fullPeakRef.current = filePeak;
-    rmsEnvRef.current = buildRmsEnvelope(buffer);
     redraw();
 
     if (buffer.duration > 1800) setMemoryWarning(true);
@@ -1866,11 +2446,18 @@ export default function App() {
   const loadTextGrid = useCallback((text) => {
     const { duration: dur, tiers } = parseTextGrid(text);
     const tierLower = Object.fromEntries(Object.entries(tiers).map(([k, v]) => [k.toLowerCase(), v]));
+    // Preserve whichever exact-cased tier name loadTextGrid actually matched (e.g. a
+    // file might use "Words" or "words") — this is what gets written back out on
+    // export/save (see serializeTextGrid), not a hardcoded literal.
+    const wordsKey  = Object.keys(tiers).find(k => k.toLowerCase() === 'words');
+    const phonesKey = Object.keys(tiers).find(k => ['phones', 'phonemes', 'phone'].includes(k.toLowerCase()));
     const w = assignRows(withIds(tierLower['words'] || []));
     const p = assignRows(withIds(tierLower['phones'] || tierLower['phonemes'] || tierLower['phone'] || []));
     durationRef.current = dur; setDuration(dur);
     wordsRef.current = w;      setWords(w);
     phonesRef.current = p;     setPhones(p);
+    wordsTierNameRef.current = wordsKey || 'words';    setWordsTierName(wordsKey || 'words');
+    phonesTierNameRef.current = phonesKey || 'phones'; setPhonesTierName(phonesKey || 'phones');
 
     // Load any extra tiers as custom tiers
     const builtinKeys = new Set(['words', 'phones', 'phonemes', 'phone']);
@@ -1886,15 +2473,17 @@ export default function App() {
     setCustomTiers([...extraTiers]);
 
     viewRef.current = { t0: 0, t1: Math.min(dur, 20) };
-    savedTextGridRef.current = serializeTextGrid(dur, w, p, extraTiers);
+    savedTextGridRef.current = serializeTextGrid(dur, w, p, extraTiers, false, wordsKey || 'words', phonesKey || 'phones');
     setIsDirty(false);
     redraw();
   }, [redraw]);
 
   // ── Export TextGrid ───────────────────────────────────────────────────
-  const doExportTextGrid = useCallback((filename, includeCustom) => {
-    const praatCompat = !includeCustom;
-    const text = serializeTextGrid(durationRef.current, wordsRef.current, phonesRef.current, customTiersRef.current, praatCompat);
+  const doExportTextGrid = useCallback((filename, praatCompat) => {
+    const text = serializeTextGrid(
+      durationRef.current, wordsRef.current, phonesRef.current, customTiersRef.current,
+      praatCompat, wordsTierNameRef.current, phonesTierNameRef.current,
+    );
     const blob = new Blob([text], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -1907,7 +2496,10 @@ export default function App() {
   // ── Save TextGrid to public/ (dev server only) ───────────────────────
   const saveTextGrid = useCallback(async () => {
     const filename = tgFileNameRef.current + '.TextGrid';
-    const content  = serializeTextGrid(durationRef.current, wordsRef.current, phonesRef.current, customTiersRef.current);
+    const content  = serializeTextGrid(
+      durationRef.current, wordsRef.current, phonesRef.current, customTiersRef.current,
+      false, wordsTierNameRef.current, phonesTierNameRef.current,
+    );
     setSaveState('saving');
     try {
       const res = await fetch('/api/save-textgrid', {
@@ -1928,6 +2520,13 @@ export default function App() {
       saveTimerRef.current = setTimeout(() => setSaveState(null), 2000);
     }
   }, []);
+
+  // Ctrl/Cmd+S entry point — gates saveTextGrid behind a one-time overwrite confirmation
+  // (skippable via the modal's "Don't ask me again" checkbox, persisted in localStorage).
+  const requestSave = useCallback(() => {
+    if (skipSaveConfirmRef.current) { saveTextGrid(); return; }
+    setShowSaveConfirm(true);
+  }, [saveTextGrid]);
 
   // ── Load a wav + optional textgrid from public/ by filename ──────────
   const loadPublicPair = useCallback(async (wavName, tgName) => {
@@ -1953,6 +2552,56 @@ export default function App() {
       fetchOverviewChunk(getChunkIndex(t0));
     } catch(e) { console.warn('Audio auto-load failed:', e); }
   }, [loadAudio, loadTextGrid, computePaddedWindow, fetchEnhancedSpec, fetchOverviewChunk]);
+
+  // Loads a wav picked via "Load Wav" or drag-and-drop as if it had been sitting in
+  // public/ all along. dsp_server.py can only read a real file path — it has no way
+  // to see bytes the browser is holding in memory — so this uploads the file to
+  // /api/upload-wav (a new dev-only endpoint) first, then follows loadPublicPair's own
+  // tail exactly (publicWavFileRef set, enhanced spectrogram fetched immediately for
+  // the starting view). If the upload fails for any reason — a production build,
+  // where this endpoint doesn't exist at all; a network error — falls back to plain
+  // loadAudio: today's non-public-file behavior, where playback/waveform still work
+  // and the enhanced spectrogram just silently stays unavailable.
+  const doLoadWavFile = useCallback(async (file) => {
+    try {
+      const res = await fetch(`/api/upload-wav?filename=${encodeURIComponent(file.name)}`, {
+        method: 'POST',
+        body: file,
+      });
+      if (!res.ok) throw new Error(await res.text());
+      await loadAudio(file);
+      publicWavFileRef.current = file.name;
+      setSetupError(null);
+      const { t0, t1 } = viewRef.current;
+      const { bufT0, bufT1 } = computePaddedWindow(t0, t1);
+      fetchEnhancedSpec(bufT0, bufT1);
+      fetchOverviewChunk(getChunkIndex(t0));
+    } catch (e) {
+      console.warn('[loadWavFile] upload to public/ failed — loading without the enhanced spectrogram:', e);
+      await loadAudio(file);
+    }
+  }, [loadAudio, computePaddedWindow, fetchEnhancedSpec, fetchOverviewChunk]);
+
+  // Entry point for "Load Wav" / drag-and-drop — checks for a public/ name collision
+  // first (via the same /api/public-files listing the startup scan uses) and asks for
+  // confirmation before overwriting (see WavOverwriteModal) rather than silently
+  // replacing a file the user may not realize shares that name.
+  const loadWavFile = useCallback(async (file) => {
+    let collision = false;
+    try {
+      const res = await fetch('/api/public-files');
+      if (res.ok) {
+        const { wavs } = await res.json();
+        collision = wavs.some(w => w.toLowerCase() === file.name.toLowerCase());
+      }
+    } catch (_) {
+      // /api/public-files unreachable (e.g. production build) — nothing could be
+      // uploaded either way, so no collision is possible; doLoadWavFile's own
+      // try/catch handles the upload failure gracefully.
+    }
+    if (collision) setWavOverwriteConfirm({ file });
+    else doLoadWavFile(file);
+  }, [doLoadWavFile]);
 
   // ── Effects ───────────────────────────────────────────────────────────
 
@@ -2036,16 +2685,14 @@ export default function App() {
           startPlay(sel ? sel.t0 : playheadRef.current);
         }
       }
-      if ((e.ctrlKey || e.metaKey) && e.code === 'KeyS') { e.preventDefault(); saveTextGrid(); return; }
+      if ((e.ctrlKey || e.metaKey) && e.code === 'KeyS') { e.preventDefault(); requestSave(); return; }
       if (e.code === 'KeyL') { const n = !loopModeRef.current; loopModeRef.current = n; setLoopMode(n); }
-      if (e.code === 'KeyF') { viewRef.current = { t0: 0, t1: DUR }; redraw(); }
       if (e.code === 'KeyR' && !e.ctrlKey && !e.metaKey) { e.preventDefault(); calcSpecForView(); }
-      // Edit mode hotkey — hardcoded to '1'.
+      // Lock/view-only toggle hotkey — hardcoded to '1'. Same effect as clicking the
+      // lock icon in the toolbar (see toggleEditMode).
       if (e.code === 'Digit1' || e.key === '1' || (e.code === 'Numpad1' && e.key === '1')) {
         e.preventDefault();
-        const n = !editModeRef.current; editModeRef.current = n; setEditMode(n);
-        if (!n) clearSelection(); // clear selection when leaving edit mode
-        redraw();
+        toggleEditMode();
       }
       if ((e.ctrlKey || e.metaKey) && e.code === 'KeyZ') {
         e.preventDefault();
@@ -2155,7 +2802,7 @@ export default function App() {
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [stopPlay, startPlay, redraw, popUndo, pushUndo, commitTierItems, clearSelection, saveTextGrid, adjustYZoom, adjustFontScale, calcSpecForView, getAllTiers, syncSelectionState]);
+  }, [stopPlay, startPlay, redraw, popUndo, pushUndo, commitTierItems, clearSelection, requestSave, adjustYZoom, adjustFontScale, calcSpecForView, getAllTiers, syncSelectionState, toggleEditMode]);
 
   // ── Zoom ──────────────────────────────────────────────────────────────
 
@@ -2185,6 +2832,26 @@ export default function App() {
     setZoomValue(v);
     applyZoom(sliderToSpan(v));
   }, [sliderToSpan, applyZoom]);
+
+  // Read the live view span (not zoomValue state) so keyboard/button steppers stay
+  // in sync after wheel/minimap zoom without waiting for a re-render.
+  const adjustTimelineZoom = useCallback((dir) => {
+    const { t0, t1 } = viewRef.current;
+    const current = spanToSlider(t1 - t0);
+    handleZoom(Math.max(0, Math.min(100, current + dir * TIMELINE_ZOOM_STEP)));
+  }, [spanToSlider, handleZoom]);
+
+  // Arrow Up/Down zoom the timeline viewing window (←/→ already pan).
+  useEffect(() => {
+    const handler = (e) => {
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+      if (e.code !== 'ArrowUp' && e.code !== 'ArrowDown') return;
+      e.preventDefault();
+      adjustTimelineZoom(e.code === 'ArrowUp' ? 1 : -1);
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [adjustTimelineZoom]);
 
   // ── Interaction ───────────────────────────────────────────────────────
 
@@ -2368,9 +3035,10 @@ export default function App() {
     const h = rect.height;
     const t = xT(x, w);
     const EDGE_PX = 6; // px within which we detect edge hover
-    const edgeT = (EDGE_PX / w) * (viewRef.current.t1 - viewRef.current.t0);
+    const { t0: viewT0, t1: viewT1 } = viewRef.current;
+    const edgeT = (EDGE_PX / w) * (viewT1 - viewT0);
 
-    const numRows = Math.max(1, ...items.map(it => (it.row ?? 0) + 1));
+    const numRows = visibleRowCount(items, viewT0, viewT1);
     const rowH = h / numRows;
 
     for (const item of items) {
@@ -2620,67 +3288,186 @@ export default function App() {
       }
 
       if (side === 'left' || side === 'right') {
-        // Edge drag — always single tile
         const startX = e.clientX;
         const startT = side === 'left' ? item.t0 : item.t1;
-        const neighbour = items.find(it =>
-          it.id !== item.id && it.row === item.row &&
-          Math.abs((side === 'left' ? it.t1 : it.t0) - startT) < 1e-6
+
+        // Only the *currently selected* tiles whose own edge on this same side sits
+        // at this exact instant actually flank this boundary and should extend
+        // together — a tile that merely happens to also be selected, but doesn't
+        // touch this particular edge, stays put.
+        const selCandidates = [];
+        for (const [selId, selEntry] of selectedTilesRef.current) {
+          const tItems = selEntry.tierId === 'words'  ? wordsRef.current
+                       : selEntry.tierId === 'phones' ? phonesRef.current
+                       : (customTiersRef.current.find(t => t.id === selEntry.tierId)?.items ?? []);
+          const it = tItems.find(x => x.id === selId);
+          if (it) selCandidates.push({ id: selId, tierId: selEntry.tierId, origT0: it.t0, origT1: it.t1 });
+        }
+        const flankers = selCandidates.filter(o =>
+          Math.abs((side === 'left' ? o.origT0 : o.origT1) - startT) < 1e-6
         );
-        const minT = side === 'left'
-          ? (neighbour ? neighbour.t0 + 0.01 : 0)
-          : item.t0 + 0.01;
-        const maxT = side === 'right'
-          ? (neighbour ? neighbour.t1 - 0.01 : DUR)
-          : item.t1 - 0.01;
 
-        let didPushUndo = false;
-        const onMove = (ev) => {
-          if (!didPushUndo) { pushUndo(); didPushUndo = true; }
-          const dx = ev.clientX - startX;
-          const dt = (dx / rect.width) * (viewRef.current.t1 - viewRef.current.t0);
-          let newT = Math.max(minT, Math.min(maxT, startT + dt));
+        if (flankers.length > 1) {
+          // ── Group edge drag: extend/shrink every flanking tile's matching edge
+          // together by the same delta (each tile's own opposite edge stays fixed) —
+          // e.g. a word tile and its last-phoneme tile, both ending at the same
+          // instant, lengthen/shorten together in one gesture. Mirrors group body
+          // drag below (same tier/bounds bookkeeping), but shifts one edge per tile.
+          const widths = flankers.map(o => o.origT1 - o.origT0);
+          // Same delta applies to every flanking tile, so the allowed range is the
+          // intersection of each tile's own "don't invert past 0.01s wide, don't cross
+          // [0, DUR]" constraint — same per-tile rule as the single-tile case below.
+          const minDt = side === 'left'
+            ? -Math.min(...flankers.map(o => o.origT0))
+            : 0.01 - Math.min(...widths);
+          const maxDt = side === 'left'
+            ? Math.min(...widths) - 0.01
+            : DUR - Math.max(...flankers.map(o => o.origT1));
 
-          // Magnetic snap to cross-tier + same-tier boundaries (Alt to disable)
-          const SNAP_PX = 10;
-          const snapThreshT = (SNAP_PX / rect.width) * (viewRef.current.t1 - viewRef.current.t0);
-          if (!ev.altKey) {
-            const crossBounds = getCrossTierBoundaries(tierId);
-            const sameBounds = itemsRef.current
-              .filter(it => it.id !== item.id && (neighbour ? it.id !== neighbour.id : true))
-              .flatMap(it => [it.t0, it.t1]);
-            const allBounds = [...crossBounds, ...sameBounds];
-            let best = null, bestD = snapThreshT;
-            for (const bt of allBounds) {
-              const d = Math.abs(newT - bt);
-              if (d < bestD) { bestD = d; best = bt; }
-            }
-            if (best !== null) newT = Math.max(minT, Math.min(maxT, best));
+          const origsByTier = new Map(); // tierId → [{ id, origT0, origT1 }]
+          for (const f of flankers) {
+            if (!origsByTier.has(f.tierId)) origsByTier.set(f.tierId, []);
+            origsByTier.get(f.tierId).push(f);
           }
-          // Guide line always tracks the dragged edge's live position, snapped or not.
-          snapGuideRef.current = { ts: [newT] };
+          // Only snap to boundaries outside the flanking set (or unselected same-tier
+          // neighbours) — never to another flanking tile's own edge — same convention
+          // as group body drag below.
+          const flankerIds = new Set(flankers.map(o => o.id));
+          const draggedTierIds = new Set(origsByTier.keys());
+          const tiers = getAllTiers();
+          const crossBounds = tiers
+            .filter(t => !draggedTierIds.has(t.id))
+            .flatMap(t => t.items.flatMap(it => [it.t0, it.t1]));
+          const sameBounds = tiers
+            .filter(t => draggedTierIds.has(t.id))
+            .flatMap(t => t.items.filter(it => !flankerIds.has(it.id)).flatMap(it => [it.t0, it.t1]));
+          const allBounds = [...crossBounds, ...sameBounds];
+          const tierRefs = new Map();
+          for (const dragTierId of draggedTierIds) {
+            tierRefs.set(dragTierId,
+              dragTierId === 'words'  ? wordsRef
+              : dragTierId === 'phones' ? phonesRef
+              : { current: customTiersRef.current.find(t => t.id === dragTierId)?.items ?? [] });
+          }
 
-          const updated = itemsRef.current.map(it => {
-            if (it.id === item.id) return { ...it, [side === 'left' ? 't0' : 't1']: newT };
-            if (neighbour && it.id === neighbour.id) return { ...it, [side === 'left' ? 't1' : 't0']: newT };
-            return it;
-          });
-          commitItems(updated);
-          // Full redraw (not just this canvas) so the guide line replaces its previous
-          // position on every canvas instead of leaving a trail on wave/spec/other tiers.
-          redraw();
-          drawSnapGuide();
-        };
-        const onUp = () => {
-          window.removeEventListener('mousemove', onMove);
-          window.removeEventListener('mouseup', onUp);
+          let didPushUndo = false;
+          const onMove = (ev) => {
+            if (!didPushUndo) { pushUndo(); didPushUndo = true; }
+            const dx = ev.clientX - startX;
+            let dt = Math.max(minDt, Math.min(maxDt,
+              (dx / rect.width) * (viewRef.current.t1 - viewRef.current.t0)));
+
+            // Snap the anchor tile's dragged edge (the one actually grabbed); the
+            // resulting delta then applies uniformly to every flanking tile.
+            if (!ev.altKey) {
+              const SNAP_PX = 10;
+              const snapThreshT = (SNAP_PX / rect.width) * (viewRef.current.t1 - viewRef.current.t0);
+              const newAnchorT = startT + dt;
+              let best = null, bestD = snapThreshT;
+              for (const bt of allBounds) {
+                const d = Math.abs(newAnchorT - bt);
+                if (d < bestD) { bestD = d; best = bt; }
+              }
+              if (best !== null) dt = Math.max(minDt, Math.min(maxDt, best - startT));
+            }
+            // One guide line per flanking tile's live dragged edge — they start
+            // coincident (that's what makes them flankers) and stay coincident.
+            snapGuideRef.current = { ts: flankers.map(o => (side === 'left' ? o.origT0 : o.origT1) + dt) };
+
+            for (const [dragTierId, origList] of origsByTier) {
+              const tItemsRef = tierRefs.get(dragTierId);
+              const idSet = new Set(origList.map(o => o.id));
+              const origMap = new Map(origList.map(o => [o.id, o]));
+              const updated = tItemsRef.current.map(it => {
+                if (!idSet.has(it.id)) return it;
+                const o = origMap.get(it.id);
+                return side === 'left'
+                  ? { ...it, t0: o.origT0 + dt }
+                  : { ...it, t1: o.origT1 + dt };
+              });
+              const withRows = assignRows(updated);
+              tItemsRef.current = withRows;
+              commitTierItems(dragTierId, withRows);
+            }
+            redraw();
+            drawSnapGuide();
+          };
+          const onUp = () => {
+            window.removeEventListener('mousemove', onMove);
+            window.removeEventListener('mouseup', onUp);
+            canvas.style.cursor = 'ew-resize';
+            snapGuideRef.current = null;
+            redraw();
+          };
           canvas.style.cursor = 'ew-resize';
-          snapGuideRef.current = null;
-          redraw();
-        };
-        canvas.style.cursor = 'ew-resize';
-        window.addEventListener('mousemove', onMove);
-        window.addEventListener('mouseup', onUp);
+          window.addEventListener('mousemove', onMove);
+          window.addEventListener('mouseup', onUp);
+
+        } else {
+          // ── Edge drag — single tile ──────────────────────────────────
+          const neighbour = items.find(it =>
+            it.id !== item.id && it.row === item.row &&
+            Math.abs((side === 'left' ? it.t1 : it.t0) - startT) < 1e-6
+          );
+          const minT = side === 'left'
+            ? (neighbour ? neighbour.t0 + 0.01 : 0)
+            : item.t0 + 0.01;
+          const maxT = side === 'right'
+            ? (neighbour ? neighbour.t1 - 0.01 : DUR)
+            : item.t1 - 0.01;
+
+          // Snap boundaries are fixed for the whole gesture — only the dragged tile
+          // (and its already-excluded neighbour) move — so compute once instead of
+          // rescanning every tier's items on every mousemove tick.
+          const crossBounds = getCrossTierBoundaries(tierId);
+          const sameBounds = itemsRef.current
+            .filter(it => it.id !== item.id && (neighbour ? it.id !== neighbour.id : true))
+            .flatMap(it => [it.t0, it.t1]);
+          const allBounds = [...crossBounds, ...sameBounds];
+
+          let didPushUndo = false;
+          const onMove = (ev) => {
+            if (!didPushUndo) { pushUndo(); didPushUndo = true; }
+            const dx = ev.clientX - startX;
+            const dt = (dx / rect.width) * (viewRef.current.t1 - viewRef.current.t0);
+            let newT = Math.max(minT, Math.min(maxT, startT + dt));
+
+            // Magnetic snap to cross-tier + same-tier boundaries (Alt to disable)
+            const SNAP_PX = 10;
+            const snapThreshT = (SNAP_PX / rect.width) * (viewRef.current.t1 - viewRef.current.t0);
+            if (!ev.altKey) {
+              let best = null, bestD = snapThreshT;
+              for (const bt of allBounds) {
+                const d = Math.abs(newT - bt);
+                if (d < bestD) { bestD = d; best = bt; }
+              }
+              if (best !== null) newT = Math.max(minT, Math.min(maxT, best));
+            }
+            // Guide line always tracks the dragged edge's live position, snapped or not.
+            snapGuideRef.current = { ts: [newT] };
+
+            const updated = itemsRef.current.map(it => {
+              if (it.id === item.id) return { ...it, [side === 'left' ? 't0' : 't1']: newT };
+              if (neighbour && it.id === neighbour.id) return { ...it, [side === 'left' ? 't1' : 't0']: newT };
+              return it;
+            });
+            commitItems(updated);
+            // Full redraw (not just this canvas) so the guide line replaces its previous
+            // position on every canvas instead of leaving a trail on wave/spec/other tiers.
+            redraw();
+            drawSnapGuide();
+          };
+          const onUp = () => {
+            window.removeEventListener('mousemove', onMove);
+            window.removeEventListener('mouseup', onUp);
+            canvas.style.cursor = 'ew-resize';
+            snapGuideRef.current = null;
+            redraw();
+          };
+          canvas.style.cursor = 'ew-resize';
+          window.addEventListener('mousemove', onMove);
+          window.addEventListener('mouseup', onUp);
+        }
 
       } else if (side === 'body') {
         const startX = e.clientX;
@@ -2710,6 +3497,28 @@ export default function App() {
           const groupOrigT0 = Math.min(...allOrig.map(o => o.origT0));
           const groupOrigT1 = Math.max(...allOrig.map(o => o.origT1));
 
+          // Snap boundaries and per-tier item refs are fixed for the whole gesture —
+          // only the selected tiles move — so resolve/compute both once instead of
+          // rescanning every tier and re-deriving each tier's ref on every mousemove
+          // tick. Only snap to tiers that have NO selected tiles; within dragged
+          // tiers snap to unselected neighbours.
+          const draggedTierIds = new Set(origsByTier.keys());
+          const tiers = getAllTiers();
+          const crossBounds = tiers
+            .filter(t => !draggedTierIds.has(t.id))
+            .flatMap(t => t.items.flatMap(it => [it.t0, it.t1]));
+          const sameBounds = tiers
+            .filter(t => draggedTierIds.has(t.id))
+            .flatMap(t => t.items.filter(it => !selectedIds.has(it.id)).flatMap(it => [it.t0, it.t1]));
+          const allBounds = [...crossBounds, ...sameBounds];
+          const tierRefs = new Map();
+          for (const dragTierId of draggedTierIds) {
+            tierRefs.set(dragTierId,
+              dragTierId === 'words'  ? wordsRef
+              : dragTierId === 'phones' ? phonesRef
+              : { current: customTiersRef.current.find(t => t.id === dragTierId)?.items ?? [] });
+          }
+
           const onMove = (ev) => {
             if (!didPushUndo) { pushUndo(); didPushUndo = true; }
             didDrag = true;
@@ -2721,16 +3530,6 @@ export default function App() {
             if (!ev.altKey) {
               const SNAP_PX = 10;
               const snapThreshT = (SNAP_PX / rect.width) * (viewRef.current.t1 - viewRef.current.t0);
-              // Only snap to tiers that have NO selected tiles; within dragged tiers snap to unselected neighbours
-              const draggedTierIds = new Set(origsByTier.keys());
-              const tiers = getAllTiers();
-              const crossBounds = tiers
-                .filter(t => !draggedTierIds.has(t.id))
-                .flatMap(t => t.items.flatMap(it => [it.t0, it.t1]));
-              const sameBounds = tiers
-                .filter(t => draggedTierIds.has(t.id))
-                .flatMap(t => t.items.filter(it => !selectedIds.has(it.id)).flatMap(it => [it.t0, it.t1]));
-              const allBounds = [...crossBounds, ...sameBounds];
               const newGroupT0 = groupOrigT0 + dt;
               const newGroupT1 = groupOrigT1 + dt;
               let best = null, bestD = snapThreshT, bestEdge = 't0';
@@ -2750,9 +3549,7 @@ export default function App() {
             snapGuideRef.current = { ts: [groupOrigT0 + dt, groupOrigT1 + dt] };
 
             for (const [dragTierId, origList] of origsByTier) {
-              const tItemsRef = dragTierId === 'words'  ? wordsRef
-                              : dragTierId === 'phones' ? phonesRef
-                              : { current: customTiersRef.current.find(t => t.id === dragTierId)?.items ?? [] };
+              const tItemsRef = tierRefs.get(dragTierId);
               const idSet = new Set(origList.map(o => o.id));
               const origMap = new Map(origList.map(o => [o.id, o]));
               const updated = tItemsRef.current.map(it => {
@@ -2795,6 +3592,15 @@ export default function App() {
           const origT0 = item.t0, origT1 = item.t1;
           const width = origT1 - origT0;
 
+          // Snap boundaries are fixed for the whole gesture — only this tile moves —
+          // so compute once instead of rescanning every tier's items on every
+          // mousemove tick.
+          const crossBounds = getCrossTierBoundaries(tierId);
+          const sameBounds = itemsRef.current
+            .filter(it => it.id !== item.id)
+            .flatMap(it => [it.t0, it.t1]);
+          const allBounds = [...crossBounds, ...sameBounds];
+
           const onMove = (ev) => {
             if (!didPushUndo) { pushUndo(); didPushUndo = true; }
             didDrag = true;
@@ -2806,11 +3612,6 @@ export default function App() {
             if (!ev.altKey) {
               const SNAP_PX = 10;
               const snapThreshT = (SNAP_PX / rect.width) * (viewRef.current.t1 - viewRef.current.t0);
-              const crossBounds = getCrossTierBoundaries(tierId);
-              const sameBounds = itemsRef.current
-                .filter(it => it.id !== item.id)
-                .flatMap(it => [it.t0, it.t1]);
-              const allBounds = [...crossBounds, ...sameBounds];
               const newT1 = newT0 + width;
               let best = null, bestD = snapThreshT, bestEdge = 't0';
               for (const bt of allBounds) {
@@ -2869,11 +3670,13 @@ export default function App() {
       menu.style.left = e.clientX + 'px';
       menu.style.top = e.clientY + 'px';
 
-      const menuItem = (label, action) => {
+      const menuItem = (label, action, disabled = false) => {
         const el = document.createElement('div');
         el.textContent = label;
-        el.className = 'ctx-menu__item';
-        el.addEventListener('mousedown', (ev) => { ev.preventDefault(); menu.remove(); action(); });
+        el.className = disabled ? 'ctx-menu__item ctx-menu__item--disabled' : 'ctx-menu__item';
+        if (!disabled) {
+          el.addEventListener('mousedown', (ev) => { ev.preventDefault(); menu.remove(); action(); });
+        }
         menu.appendChild(el);
       };
 
@@ -2903,7 +3706,7 @@ export default function App() {
           );
           commitItems(updated);
           redraw();
-        });
+        }, item.edited);
       }
 
       const sep = document.createElement('div');
@@ -2939,30 +3742,6 @@ export default function App() {
     const c2 = addTierEditInteraction(phonesCanvasRef.current, phonesRef, false, 'phones');
     return () => { c1(); c2(); };
   }, [addTierEditInteraction, words, phones]);
-
-  // Drag-and-drop files
-  useEffect(() => {
-    const onOver  = (e) => { e.preventDefault(); setDropping(true); };
-    const onLeave = (e) => { if (!e.relatedTarget) setDropping(false); };
-    const onDrop  = (e) => {
-      e.preventDefault(); setDropping(false);
-      const f = e.dataTransfer.files[0]; if (!f) return;
-      if (f.name.toLowerCase().endsWith('.textgrid')) {
-        tgFileNameRef.current = f.name.replace(/\.TextGrid$/i, '');
-        const reader = new FileReader();
-        reader.onload = (ev) => loadTextGrid(ev.target.result);
-        reader.readAsText(f);
-      }
-    };
-    window.addEventListener('dragover', onOver);
-    window.addEventListener('dragleave', onLeave);
-    window.addEventListener('drop', onDrop);
-    return () => {
-      window.removeEventListener('dragover', onOver);
-      window.removeEventListener('dragleave', onLeave);
-      window.removeEventListener('drop', onDrop);
-    };
-  }, [loadAudio, loadTextGrid]);
 
   // ── Custom tier canvas interactions ──────────────────────────────────
   useEffect(() => {
@@ -3018,7 +3797,53 @@ export default function App() {
     fetchOverviewChunk(getChunkIndex(t0));
   }, [calcBaseSpec, drawSpec, computePaddedWindow, fetchEnhancedSpec, fetchOverviewChunk]);
 
-  const handleAudioFile = (e) => { if (e.target.files[0]) loadAudio(e.target.files[0]); };
+  const toggleEnvelope = useCallback(() => {
+    const n = !envelopeVisibleRef.current;
+    envelopeVisibleRef.current = n;
+    setEnvelopeVisible(n);
+    drawWave();
+  }, [drawWave]);
+
+  const WAVE_CTX_MENU_W = 190;
+  const WAVE_CTX_MENU_H = 90;
+  const handleWaveContextMenu = useCallback((e) => {
+    e.preventDefault();
+    setSpecCtxMenu(null);
+    setWaveCtxMenu({
+      x: Math.max(8, Math.min(e.clientX, window.innerWidth - WAVE_CTX_MENU_W - 8)),
+      y: Math.max(8, Math.min(e.clientY, window.innerHeight - WAVE_CTX_MENU_H - 8)),
+    });
+  }, []);
+
+  // Estimated footprint keeps the flat spectrogram menu inside the viewport.
+  const SPEC_CTX_MENU_W = 220;
+  const SPEC_CTX_MENU_H = 285;
+  const handleSpecContextMenu = useCallback((e) => {
+    e.preventDefault();
+    setWaveCtxMenu(null);
+    setSpecCtxMenu({
+      x: Math.max(8, Math.min(e.clientX, window.innerWidth - SPEC_CTX_MENU_W - 8)),
+      y: Math.max(8, Math.min(e.clientY, window.innerHeight - SPEC_CTX_MENU_H - 8)),
+    });
+  }, []);
+
+  // Live frequency crosshair — inverts the same mel-scale mapping used for
+  // SPEC_AXIS_TICKS/drawSpec's formant y-positions, so the readout lines up
+  // exactly with the fixed tick labels and any formant dots/pitch line on screen.
+  const handleSpecMouseMove = useCallback((e) => {
+    const canvas = specCanvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const y = e.clientY - rect.top;
+    if (rect.height <= 0 || y < 0 || y > rect.height) { setSpecCrosshair(null); return; }
+    const melMax = 2595 * Math.log10(1 + SPEC_AXIS_FMAX / 700);
+    const mel = melMax * (1 - y / rect.height);
+    const hz = Math.max(0, 700 * (10 ** (mel / 2595) - 1));
+    setSpecCrosshair({ y, hz });
+  }, []);
+  const handleSpecMouseLeave = useCallback(() => setSpecCrosshair(null), []);
+
+  const handleAudioFile = (e) => { if (e.target.files[0]) loadWavFile(e.target.files[0]); };
   const handleTGFile    = (e) => {
     const f = e.target.files[0]; if (!f) return;
     tgFileNameRef.current = f.name.replace(/\.TextGrid$/i, '');
@@ -3097,23 +3922,9 @@ export default function App() {
     if (newPhones.length === 0)
       throw new Error('MFA returned no non-silent phones for this segment — alignment may have failed');
 
-    // ── Overlap guard: if any new phone overlaps a kept phone, warn ─────────
-    for (const np of newPhones) {
-      for (const kp of kept) {
-        const overlaps = np.t0 < kp.t1 - 1e-6 && np.t1 > kp.t0 + 1e-6;
-        if (overlaps) {
-          // Clamp kept phone to not overlap with MFA result
-          // (MFA result takes priority within the selected segment)
-          console.warn(
-            `MFA phone [${np.t0.toFixed(3)}, ${np.t1.toFixed(3)}] '${np.text}' ` +
-            `overlaps existing phone [${kp.t0.toFixed(3)}, ${kp.t1.toFixed(3)}] '${kp.text}' — ` +
-            `existing phone will be trimmed`
-          );
-        }
-      }
-    }
-
-    // Trim kept phones that partially overlap the segment boundary
+    // Trim kept phones that partially overlap the segment boundary. MFA result takes
+    // priority within the selected segment, so any kept phone that pokes into the
+    // segment gets clamped back to whichever segment edge it crosses.
     const trimmed = kept.map(p => {
       if (p.t1 > segT0 && p.t0 < segT0) return { ...p, t1: segT0 };  // overlaps left edge
       if (p.t0 < segT1 && p.t1 > segT1) return { ...p, t0: segT1 };  // overlaps right edge
@@ -3182,8 +3993,7 @@ export default function App() {
 
       pushUndo();
       const merged = applyMfaResult(result.phones, segT0, segT1);
-      phonesRef.current = merged;
-      setPhones([...merged]);
+      commitTierItems('phones', merged);
       redraw();
 
       updateQueue(q => q.filter(j => j.id !== next.id));
@@ -3197,7 +4007,7 @@ export default function App() {
       const remaining = mfaQueueRef.current.find(j => j.status === 'pending');
       if (remaining) processNextMfaJob();
     }
-  }, [applyMfaResult, pushUndo, redraw, updateQueue]);
+  }, [applyMfaResult, commitTierItems, pushUndo, redraw, updateQueue]);
 
   const enqueueRunMfa = useCallback((targetWords, sel) => {
     const sorted = [...targetWords].sort((a, b) => a.t0 - b.t0);
@@ -3277,14 +4087,115 @@ export default function App() {
     },
   });
 
+  // Confidence Dashboard's lowest-confidence list — click a word to jump to it.
+  // Mirrors a plain tile click (see addTierEditInteraction's non-edit-mode path):
+  // exclusive select + move playhead to t0 + redraw, plus recentres the timeline
+  // if the word is currently scrolled out of view.
+  const seekToWord = useCallback((w) => {
+    selectedTilesRef.current.clear();
+    selectedTilesRef.current.set(w.id, { id: w.id, tierId: 'words' });
+    syncSelectionState();
+    selectionRef.current = { t0: w.t0, t1: w.t1 };
+    playheadRef.current = w.t0;
+
+    const { t0, t1 } = viewRef.current;
+    if (w.t0 < t0 || w.t0 > t1) {
+      const span = t1 - t0;
+      const DUR = durationRef.current;
+      const desiredT0 = Math.max(0, Math.min(DUR - span, w.t0 - span / 2));
+      viewRef.current = { t0: desiredT0, t1: desiredT0 + span };
+    }
+
+    updateTimeDisplay();
+    redraw();
+    if (autoPlayTileRef.current) { stopPlay(); startPlay(w.t0); }
+  }, [syncSelectionState, updateTimeDisplay, redraw, stopPlay, startPlay]);
+
+  // Promotes *tierId*'s data into the Words or Phones role. MFA itself is untouched
+  // by this: it always reads wordsRef / writes phonesRef, so once a tier is promoted
+  // into that role, MFA transparently picks it up without needing to know it exists.
+  // Export always uses each role's *current* name (wordsTierNameRef/phonesTierNameRef)
+  // rather than a hardcoded "words"/"phones" literal — see serializeTextGrid.
+  //
+  // Whatever was previously playing the role is only preserved as a leftover custom
+  // tier if it actually had content — the common case (nothing was there, since the
+  // whole point of this picker is TextGrids that don't have a literal "words"/"phones"
+  // tier at all) just promotes cleanly with no phantom empty tier left behind.
+  const promoteTierToRole = useCallback((role, tierId) => {
+    if (tierId === role) return; // already playing that role
+    pushUndo();
+    clearSelection(); // tile selections reference tierIds whose identity is about to change
+
+    const isWordsRole = role === 'words';
+    const roleRef      = isWordsRole ? wordsRef : phonesRef;
+    const roleNameRef   = isWordsRole ? wordsTierNameRef : phonesTierNameRef;
+    const setRoleItems  = isWordsRole ? setWords : setPhones;
+    const setRoleName   = isWordsRole ? setWordsTierName : setPhonesTierName;
+
+    const displacedItems = roleRef.current;
+    const displacedName  = roleNameRef.current;
+    const displacedHasContent = displacedItems.length > 0;
+
+    const otherRole = isWordsRole ? 'phones' : 'words';
+    if (tierId === otherRole) {
+      // Direct words<->phones swap — both roles always have *some* identity, so
+      // there's no "phantom empty tier" concern here.
+      const otherRef     = isWordsRole ? phonesRef : wordsRef;
+      const otherNameRef = isWordsRole ? phonesTierNameRef : wordsTierNameRef;
+      const otherSetItems = isWordsRole ? setPhones : setWords;
+      const otherSetName  = isWordsRole ? setPhonesTierName : setWordsTierName;
+
+      roleRef.current = otherRef.current;         setRoleItems([...roleRef.current]);
+      roleNameRef.current = otherNameRef.current; setRoleName(roleNameRef.current);
+      otherRef.current = displacedItems;          otherSetItems([...displacedItems]);
+      otherNameRef.current = displacedName;       otherSetName(displacedName);
+    } else {
+      const custom = customTiersRef.current.find(t => t.id === tierId);
+      if (!custom) return;
+
+      roleRef.current = custom.items;    setRoleItems([...custom.items]);
+      roleNameRef.current = custom.name; setRoleName(custom.name);
+
+      const ct = displacedHasContent
+        // Something worth keeping was displaced — leave it behind in the promoted
+        // tier's old slot, under its own original name. Always visible: true here,
+        // not `...t`'s own flag — the displaced content is a different tier's data
+        // and has no relationship to whatever visibility the promoted tier happened
+        // to have (spreading `...t` here previously cross-wired the two, so hiding
+        // the promoted tier before promoting it could silently hide the displaced
+        // content too).
+        ? customTiersRef.current.map(t =>
+            t.id === tierId ? { ...t, name: displacedName, items: displacedItems, visible: true } : t
+          )
+        // Nothing to preserve — the promoted tier just leaves the custom-tier list
+        // entirely, with no renamed placeholder left behind.
+        : customTiersRef.current.filter(t => t.id !== tierId);
+      customTiersRef.current = ct; setCustomTiers([...ct]);
+    }
+
+    redraw();
+  }, [pushUndo, clearSelection, redraw]);
+
+  // Every tier currently loaded, for the WRD/PHN gutters' "⋮" tier-role pickers.
+  // Plain tier names only (no "WRD —"/"PHN —" prefix) — the popover's own title
+  // already says which role this list is for, so prefixing here just made the
+  // built-in options look like unrelated, differently-named entries.
+  // A custom tier whose name exactly matches whichever name the built-in row is
+  // currently showing (e.g. a custom tier literally named "words") would otherwise
+  // render as a second, indistinguishable-by-text row — mark it explicitly so the
+  // two are never confusable, same idea as customTierLabel's "(tier)" fallback.
+  const tierSourceOptions = [
+    { id: 'words', label: wordsTierName },
+    { id: 'phones', label: phonesTierName },
+    ...customTiers.map(t => ({
+      id: t.id,
+      label: (t.name === wordsTierName || t.name === phonesTierName) ? `${t.name} (tier)` : t.name,
+    })),
+  ];
+
   // ── JSX ───────────────────────────────────────────────────────────────
   return (
     <>
-      <div className={`drop-overlay${dropping ? ' active' : ''}`}>
-        <div style={{ fontSize: 32 }}>🎵</div>
-        <div>Drop audio or TextGrid file to load</div>
-      </div>
-
       {setupError && (
         <div style={{
           position: 'fixed', inset: 0, zIndex: 9999,
@@ -3304,6 +4215,35 @@ export default function App() {
             annotation_tool/code/frontend-reactjs/public/
           </div>
         </div>
+      )}
+
+      {/* Save-overwrite confirmation — shown on Ctrl/Cmd+S unless the user opted out */}
+      {showSaveConfirm && (
+        <SaveConfirmModal
+          filename={tgFileNameRef.current + '.TextGrid'}
+          onCancel={() => setShowSaveConfirm(false)}
+          onConfirm={(dontAskAgain) => {
+            setShowSaveConfirm(false);
+            if (dontAskAgain) {
+              skipSaveConfirmRef.current = true;
+              try { localStorage.setItem('skipSaveConfirm', 'true'); } catch (_) {}
+            }
+            saveTextGrid();
+          }}
+        />
+      )}
+
+      {/* Confirms before "Load Wav"/drag-and-drop overwrites a same-named public/ file */}
+      {wavOverwriteConfirm && (
+        <WavOverwriteModal
+          filename={wavOverwriteConfirm.file.name}
+          onCancel={() => setWavOverwriteConfirm(null)}
+          onConfirm={() => {
+            const f = wavOverwriteConfirm.file;
+            setWavOverwriteConfirm(null);
+            doLoadWavFile(f);
+          }}
+        />
       )}
 
       {/* File picker modal — shown when multiple wav/TextGrid files are in public/ */}
@@ -3347,214 +4287,267 @@ export default function App() {
       )}
 
       <div className="toolbar">
-        <div className="logo">
-          <button
-            type="button"
-            className="logo-btn"
-            onClick={() => setShowShortcutsPopover(v => !v)}
-            title="Keyboard shortcuts"
-          >
-            GSA
-          </button>
-          {isDirty && !saveState && (
-            <span className="save-indicator save-indicator--unsaved">● Unsaved</span>
-          )}
-          {saveState && (
-            <span className={`save-indicator save-indicator--${saveState}`}>
-              {saveState === 'saving' ? '⟳ Saving…' : saveState === 'saved' ? '✓ Saved' : '✕ Save failed'}
-            </span>
-          )}
-          {showShortcutsPopover && (
-            <ShortcutsPopover onClose={() => setShowShortcutsPopover(false)} />
-          )}
-        </div>
-        <div className="spacer" />
-        <div className="transport">
-          <button className={`btn${loopMode ? ' active' : ''}`} onClick={() => { const n = !loopModeRef.current; loopModeRef.current = n; setLoopMode(n); }} title="Loop selection (L)">
-            ⟲<span className="btn-label">Loop</span>
-          </button>
-          <button
-            className={`btn btn-play${playing ? ' paused' : ''}`}
-            onClick={() => {
-              if (playing) {
-                stopPlay();
-              } else if (audioBufferRef.current) {
-                const sel = selectionRef.current;
-                startPlay(sel ? sel.t0 : playheadRef.current);
-              } else {
-                alert('Place a .wav file in public/ and reload the page.');
-              }
-            }}
-            title={playing ? 'Pause (Space)' : 'Play (Space)'}
-          >{playing ? '⏸' : '▶'}</button>
-          <button className="btn" onClick={() => { stopPlay(); playheadRef.current = 0; updateTimeDisplay(); redraw(); }}>■</button>
-          <div className="time-display" ref={timeDisplayRef}>
-            {fmtTime(playheadRef.current)} / {fmtTime(duration)}
+        <div className="toolbar-group toolbar-group--left">
+          <div className="logo">
+            <button
+              type="button"
+              className="logo-btn"
+              onClick={() => setShowShortcutsPopover(v => !v)}
+              title="Keyboard shortcuts"
+            >
+              GSA
+            </button>
+            {!editMode && (
+              <button
+                type="button"
+                className="lock-indicator"
+                onClick={toggleEditMode}
+                title="Locked — view only. Click (or press 1) to unlock editing."
+                aria-label="Unlock editing (currently locked, view only)"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+                  <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+                </svg>
+              </button>
+            )}
+            {isDirty && !saveState && (
+              <span className="save-indicator save-indicator--unsaved">● Unsaved</span>
+            )}
+            {saveState && (
+              <span className={`save-indicator save-indicator--${saveState}`}>
+                {saveState === 'saving' ? '⟳ Saving…' : saveState === 'saved' ? '✓ Saved' : '✕ Save failed'}
+              </span>
+            )}
+            {showShortcutsPopover && (
+              <ShortcutsPopover onClose={() => setShowShortcutsPopover(false)} />
+            )}
           </div>
-          <span className="zoom-label">SPEED</span>
-          <select
-            className="colormap-select"
-            value={playbackRate}
-            onChange={e => {
-              const r = parseFloat(e.target.value);
-              playbackRateRef.current = r;
-              setPlaybackRate(r);
-              if (playingRef.current) {
-                const ph = playheadRef.current;
-                stopPlay();
-                startPlay(ph);
-              }
-            }}
-            title="Playback speed"
-          >
-            {[0.25, 0.5, 0.75, 1, 1.25, 1.5, 2].map(r => (
-              <option key={r} value={r}>{r}×</option>
-            ))}
-          </select>
         </div>
-        <div className="zoom-row">
-          <span className="zoom-label">ZOOM</span>
-          <input type="range" min="0" max="100" value={zoomValue} onChange={e => handleZoom(+e.target.value)} title="Zoom level" />
+
+        <div className="toolbar-group toolbar-group--center">
+          <div className="undo-redo-group">
+            <button
+              className="btn btn-undo-redo"
+              onClick={() => { popUndo(); redraw(); }}
+              disabled={undoStackRef.current.length === 0}
+              title="Undo (Ctrl/Cmd+Z)"
+            >
+              ↩
+            </button>
+            <button
+              className="btn btn-undo-redo"
+              onClick={() => { popRedo(); redraw(); }}
+              disabled={redoCount === 0}
+              title="Redo (Ctrl/Cmd+Y)"
+              style={{ opacity: redoCount === 0 ? 0.4 : 1 }}
+            >
+              ↪
+            </button>
+          </div>
+
+          <div className="toolbar-divider" />
+
+          <div className="transport">
+            <button
+              className={`btn btn-play${playing ? ' paused' : ''}`}
+              onClick={() => {
+                if (playing) {
+                  stopPlay();
+                } else if (audioBufferRef.current) {
+                  const sel = selectionRef.current;
+                  startPlay(sel ? sel.t0 : playheadRef.current);
+                } else {
+                  alert('Place a .wav file in public/ and reload the page.');
+                }
+              }}
+              title={playing ? 'Pause (Space)' : 'Play (Space)'}
+            >{playing ? '⏸' : '▶'}</button>
+            <button className="btn" onClick={() => { stopPlay(); playheadRef.current = 0; updateTimeDisplay(); redraw(); }} title="Stop">■</button>
+            <div className="time-display" ref={timeDisplayRef}>
+              {fmtTime(playheadRef.current)} / {fmtTime(duration)}
+            </div>
+            <select
+              className="colormap-select"
+              value={playbackRate}
+              onChange={e => {
+                const r = parseFloat(e.target.value);
+                playbackRateRef.current = r;
+                setPlaybackRate(r);
+                if (playingRef.current) {
+                  const ph = playheadRef.current;
+                  stopPlay();
+                  startPlay(ph);
+                }
+              }}
+              title="Playback speed"
+            >
+              {[0.25, 0.5, 0.75, 1, 1.25, 1.5, 2].map(r => (
+                <option key={r} value={r}>{r}×</option>
+              ))}
+            </select>
+          </div>
+
+          <div className="zoom-row">
+            <button
+              type="button"
+              className="btn zoom-step-btn"
+              onClick={() => adjustTimelineZoom(-1)}
+              disabled={zoomValue <= 0}
+              title="Zoom timeline out"
+              aria-label="Zoom timeline out"
+            >
+              −
+            </button>
+            <input type="range" min="0" max="100" value={zoomValue} onChange={e => handleZoom(+e.target.value)} title="Zoom level" />
+            <button
+              type="button"
+              className="btn zoom-step-btn"
+              onClick={() => adjustTimelineZoom(1)}
+              disabled={zoomValue >= 100}
+              title="Zoom timeline in"
+              aria-label="Zoom timeline in"
+            >
+              +
+            </button>
+          </div>
         </div>
-        <button
-          className={`btn${showDashboard ? ' active' : ''}`}
-          onClick={() => setShowDashboard(v => !v)}
-          title="Toggle confidence score distribution panel"
-        >
-          ◎<span className="btn-label">Scores</span>
-        </button>
-        {/* ── MFA button + queue dropdown ───────────────────────────── */}
-        {(() => {
-          const running = mfaQueue.find(j => j.status === 'running');
-          const pending = mfaQueue.filter(j => j.status === 'pending');
-          const busy    = !!running;
-          const queueCount = pending.length + (running ? 1 : 0);
-          const label = running
-            ? `⟳ ${running.label} ${running.segT0.toFixed(1)}–${running.segT1.toFixed(1)}s`
-            : '⚙ MFA';
-          return (
-            <div style={{ position: 'relative' }}>
-              <div style={{ display: 'flex' }}>
-                <button
-                  className={`btn btn-mfa${busy ? ' computing' : ''}`}
-                  onClick={handleRunMfa}
-                  title="Run MFA on current selection"
-                  style={{ borderRadius: queueCount > 0 ? '6px 0 0 6px' : 6, borderRight: queueCount > 0 ? 'none' : undefined, maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-                >
-                  {label}
-                </button>
-                {queueCount > 0 && (
-                  <button
-                    className={`btn btn-mfa${busy ? ' computing' : ''}`}
-                    onClick={() => setMfaQueueOpen(v => !v)}
-                    title="Show MFA queue"
-                    style={{ borderRadius: '0 6px 6px 0', padding: '0 8px', borderLeft: '1px solid rgba(var(--mfa-rgb),0.2)' }}
-                  >
-                    {queueCount}▾
-                  </button>
-                )}
-              </div>
-              {mfaQueueOpen && mfaQueue.length > 0 && (
-                <div
-                  className="mfa-queue-dropdown"
-                  onMouseLeave={() => setMfaQueueOpen(false)}
-                >
-                  {mfaQueue.map((job, i) => (
-                    <div key={job.id} style={{
-                      display: 'flex', alignItems: 'center', gap: 8,
-                      padding: '5px 12px',
-                      borderBottom: i < mfaQueue.length - 1 ? '1px solid var(--border)' : 'none',
-                    }}>
-                      <span style={{ fontSize: 11, color: job.status === 'running' ? 'var(--warn-computing)' : job.status === 'error' ? 'var(--error-text)' : 'var(--text-mute)', flexShrink: 0 }}>
-                        {job.status === 'running' ? '⟳' : job.status === 'error' ? '✕' : '○'}
-                      </span>
-                      <span style={{ flex: 1, fontSize: 11, color: 'var(--text-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {job.label}
-                      </span>
-                      <span style={{ fontSize: 10, fontFamily: "'JetBrains Mono',monospace", color: 'var(--text-dark)', flexShrink: 0 }}>
-                        {job.segT0.toFixed(1)}–{job.segT1.toFixed(1)}s
-                      </span>
-                      {(job.status === 'pending' || job.status === 'error') && (
-                        <button
-                          onClick={() => updateQueue(q => q.filter(j => j.id !== job.id))}
-                          style={{ background: 'none', border: 'none', color: 'var(--text-dark)', cursor: 'pointer', padding: 0, fontSize: 13, lineHeight: 1, flexShrink: 0 }}
-                          title="Remove"
-                        >×</button>
-                      )}
+
+        <div className="toolbar-group toolbar-group--right">
+          <div className="toolbar-group">
+            <button
+              className={`btn${showDashboard ? ' active' : ''}`}
+              onClick={() => setShowDashboard(v => !v)}
+              title="Toggle confidence score distribution panel"
+            >
+              Scores
+            </button>
+            {/* ── MFA button + queue dropdown ───────────────────────────── */}
+            {(() => {
+              const running = mfaQueue.find(j => j.status === 'running');
+              const pending = mfaQueue.filter(j => j.status === 'pending');
+              const busy    = !!running;
+              const queueCount = pending.length + (running ? 1 : 0);
+              const label = running
+                ? `⟳ ${running.label} ${running.segT0.toFixed(1)}–${running.segT1.toFixed(1)}s`
+                : 'MFA';
+              return (
+                <div style={{ position: 'relative' }}>
+                  <div style={{ display: 'flex' }}>
+                    <button
+                      className={`btn btn-mfa${busy ? ' computing' : ''}`}
+                      onClick={handleRunMfa}
+                      title="Run MFA on current selection"
+                      style={{ borderRadius: queueCount > 0 ? '6px 0 0 6px' : 6, borderRight: queueCount > 0 ? 'none' : undefined, maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                    >
+                      {label}
+                    </button>
+                    {queueCount > 0 && (
+                      <button
+                        className={`btn btn-mfa${busy ? ' computing' : ''}`}
+                        onClick={() => setMfaQueueOpen(v => !v)}
+                        title="Show MFA queue"
+                        style={{ borderRadius: '0 6px 6px 0', padding: '0 8px', borderLeft: '1px solid rgba(var(--mfa-rgb),0.2)' }}
+                      >
+                        {queueCount}▾
+                      </button>
+                    )}
+                  </div>
+                  {mfaQueueOpen && mfaQueue.length > 0 && (
+                    <div
+                      className="mfa-queue-dropdown"
+                      onMouseLeave={() => setMfaQueueOpen(false)}
+                    >
+                      {mfaQueue.map((job, i) => (
+                        <div key={job.id} style={{
+                          display: 'flex', alignItems: 'center', gap: 8,
+                          padding: '5px 12px',
+                          borderBottom: i < mfaQueue.length - 1 ? '1px solid var(--border)' : 'none',
+                        }}>
+                          <span style={{ fontSize: 11, color: job.status === 'running' ? 'var(--warn-computing)' : job.status === 'error' ? 'var(--error-text)' : 'var(--text-mute)', flexShrink: 0 }}>
+                            {job.status === 'running' ? '⟳' : job.status === 'error' ? '✕' : '○'}
+                          </span>
+                          <span style={{ flex: 1, fontSize: 11, color: 'var(--text-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {job.label}
+                          </span>
+                          <span style={{ fontSize: 10, fontFamily: "'JetBrains Mono',monospace", color: 'var(--text-dark)', flexShrink: 0 }}>
+                            {job.segT0.toFixed(1)}–{job.segT1.toFixed(1)}s
+                          </span>
+                          {(job.status === 'pending' || job.status === 'error') && (
+                            <button
+                              onClick={() => updateQueue(q => q.filter(j => j.id !== job.id))}
+                              style={{ background: 'none', border: 'none', color: 'var(--text-dark)', cursor: 'pointer', padding: 0, fontSize: 13, lineHeight: 1, flexShrink: 0 }}
+                              title="Remove"
+                            >×</button>
+                          )}
+                        </div>
+                      ))}
                     </div>
-                  ))}
+                  )}
                 </div>
+              );
+            })()}
+          </div>
+
+          <div className="toolbar-divider" />
+
+          <div className="toolbar-group">
+            {/* ── Export button + filename popover ─────────────────────── */}
+            <div style={{ position: 'relative' }}>
+              <button
+                className="btn btn-export"
+                onClick={() => setShowExportPopover(v => !v)}
+                title="Export TextGrid"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                  <polyline points="17 8 12 3 7 8" />
+                  <line x1="12" y1="3" x2="12" y2="15" />
+                </svg>
+                <span className="btn-label">Export</span>
+              </button>
+              {showExportPopover && (
+                <ExportPopover
+                  defaultName={tgFileNameRef.current}
+                  customTiers={customTiers}
+                  onExport={doExportTextGrid}
+                  onClose={() => setShowExportPopover(false)}
+                />
               )}
             </div>
-          );
-        })()}
-        <button
-          className="btn btn-undo-redo"
-          onClick={() => { popUndo(); redraw(); }}
-          disabled={undoStackRef.current.length === 0}
-          title="Undo (Ctrl/Cmd+Z)"
-        >
-          ↶
-        </button>
-        <button
-          className="btn btn-undo-redo"
-          onClick={() => { popRedo(); redraw(); }}
-          disabled={redoCount === 0}
-          title="Redo (Ctrl/Cmd+Y)"
-          style={{ opacity: redoCount === 0 ? 0.4 : 1 }}
-        >
-          ↷
-        </button>
-        {/* ── Export button + filename popover ─────────────────────── */}
-        <div style={{ position: 'relative' }}>
-          <button
-            className="btn btn-export"
-            onClick={() => setShowExportPopover(v => !v)}
-            title="Export TextGrid"
-          >
-            ↓<span className="btn-label">Export</span>
-          </button>
-          {showExportPopover && (
-            <ExportPopover
-              defaultName={tgFileNameRef.current}
-              customTiers={customTiers}
-              onExport={doExportTextGrid}
-              onClose={() => setShowExportPopover(false)}
-            />
-          )}
+
+            {/* ── Overflow menu: Loop, Add Tier, Load TextGrid, theme toggle ── */}
+            <div style={{ position: 'relative' }}>
+              <button
+                className={`btn${loopMode ? ' active' : ''}`}
+                onClick={() => setShowMoreMenu(v => !v)}
+                title={loopMode ? 'More options (Loop is on — L to toggle)' : 'More options'}
+                aria-label="More options"
+              >
+                More<span style={{ marginLeft: 5 }}>⋮</span>
+              </button>
+              {showMoreMenu && (
+                <MoreMenu
+                  onClose={() => setShowMoreMenu(false)}
+                  loopMode={loopMode}
+                  onToggleLoop={() => { const n = !loopModeRef.current; loopModeRef.current = n; setLoopMode(n); }}
+                  showTierManager={showTierManager}
+                  onOpenTierManager={() => setShowTierManager(v => !v)}
+                  onAddTier={(name) => {
+                    const newTier = { id: nextId(), name, visible: true, items: [] };
+                    customTiersRef.current = [...customTiersRef.current, newTier];
+                    setCustomTiers([...customTiersRef.current]);
+                    setShowTierManager(false);
+                  }}
+                  onCloseTierManager={() => setShowTierManager(false)}
+                  onLoadTextGrid={handleTGFile}
+                  onLoadWav={handleAudioFile}
+                  onToggleTheme={() => setTheme(t => (t === 'dark' ? 'light' : 'dark'))}
+                />
+              )}
+            </div>
+          </div>
         </div>
-        {/* ── Add Tier button + inline popover ─────────────────────── */}
-        <div style={{ position: 'relative' }}>
-          <button
-            className="btn btn-tier"
-            onClick={() => setShowTierManager(v => !v)}
-            title="Add a custom tier"
-          >
-            + Tier
-          </button>
-          {showTierManager && (
-            <TierNamePopover
-              onAdd={(name) => {
-                const newTier = { id: nextId(), name, visible: true, items: [] };
-                customTiersRef.current = [...customTiersRef.current, newTier];
-                setCustomTiers([...customTiersRef.current]);
-                setShowTierManager(false);
-              }}
-              onClose={() => setShowTierManager(false)}
-            />
-          )}
-        </div>
-        <label className="load-btn" title="Load a TextGrid file">
-          📄 Load
-          <input type="file" accept=".TextGrid,.textgrid" onChange={handleTGFile} />
-        </label>
-        <button
-          className="btn"
-          onClick={() => setTheme(t => (t === 'dark' ? 'light' : 'dark'))}
-          title={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
-        >
-          {theme === 'dark' ? '🌙' : '☀'}
-        </button>
       </div>
 
       <div style={{ flex: 1, minHeight: 0, display: 'flex', overflow: 'hidden' }}>
@@ -3565,13 +4558,22 @@ export default function App() {
         <div className="panels" ref={panelsDivRef}>
           <div className="panel" ref={wavePanelRef} style={{ flex: panelSplitRef.current }}>
             <div className="panel-gutter panel-gutter--wave">
-              <button className="panel-gutter-btn" onClick={() => { focusedPanelRef.current = 'waveform'; adjustYZoom(1); }} title="Zoom in (waveform amplitude)">+</button>
-              <span>WV</span>
-              <button className="panel-gutter-btn" onClick={() => { focusedPanelRef.current = 'waveform'; adjustYZoom(-1); }} title="Zoom out (waveform amplitude)">−</button>
+              <div className="panel-gutter__identity panel-gutter__identity--controls">
+                <button className="panel-gutter-btn" onClick={() => { focusedPanelRef.current = 'waveform'; adjustYZoom(1); }} title="Zoom in (waveform amplitude)">+</button>
+                <span className="gutter-label">WAV</span>
+                <button className="panel-gutter-btn" onClick={() => { focusedPanelRef.current = 'waveform'; adjustYZoom(-1); }} title="Zoom out (waveform amplitude)">−</button>
+              </div>
             </div>
             <div className="panel-body">
-              <div className="panel-tag">Waveform</div>
-              <canvas ref={waveCanvasRef} style={{ height: '100%' }} />
+              <canvas ref={waveCanvasRef} style={{ height: '100%' }} onContextMenu={handleWaveContextMenu} />
+              {waveCtxMenu && (
+                <WaveContextMenu
+                  x={waveCtxMenu.x} y={waveCtxMenu.y}
+                  onClose={() => setWaveCtxMenu(null)}
+                  envelopeVisible={envelopeVisible}
+                  onToggleEnvelope={toggleEnvelope}
+                />
+              )}
             </div>
           </div>
           <div
@@ -3587,57 +4589,62 @@ export default function App() {
             )}
           />
           <div className="panel" ref={specPanelRef} style={{ flex: 1 - panelSplitRef.current }}>
-            <div className="panel-gutter">SP</div>
-            <div className="panel-body">
-              <div className="panel-tag" style={{ left: 36 }}>Mel Spectrogram</div>
-              <canvas ref={specCanvasRef} style={{ height: '100%' }} />
-              <div className="spec-overlay-btns">
-                <select className="colormap-select" value={colormapName} onChange={e => handleColormapChange(e.target.value)} title="Spectrogram colormap">
-                  <option value="jet">Jet</option>
-                  <option value="inferno">Inferno</option>
-                  <option value="viridis">Viridis</option>
-                  <option value="greys">Greys</option>
-                </select>
-                <div className="formant-card">
-                  <button
-                    className={`formant-card__generate${specComputing ? ' computing' : ''}`}
-                    onClick={calcSpecForView}
-                    disabled={specComputing}
-                    title="Force an immediate refresh of the enhanced spectrogram for the current view (it otherwise updates automatically as you scroll)"
+            <div className="panel-gutter panel-gutter--axis">
+              <div className="panel-gutter__identity"><span className="gutter-label">SPEC</span></div>
+              <div className="axis-labels" aria-hidden="true">
+                {SPEC_AXIS_TICKS.map(({ hz, label, position }) => (
+                  <span
+                    key={hz}
+                    className="axis-label"
+                    style={{ '--axis-position': `${position}%` }}
                   >
-                    {specComputing ? '⟳ Refreshing…' : '↻ Force Refresh'}
-                  </button>
-                </div>
-                <div className="formant-card">
-                  <button
-                    className={`formant-card__generate${formantComputing ? ' computing' : ''}`}
-                    onClick={calcFormantForView}
-                    disabled={formantComputing}
-                    title="Generate F1·F2·F3 formants for current view"
-                  >
-                    {formantComputing ? '⟳ Generating…' : '⟳ Generate Formants'}
-                  </button>
-                  <div className="formant-card__seg">
-                    {['f1', 'f2', 'f3'].map(key => (
-                      <button
-                        key={key}
-                        className={`formant-card__seg-btn formant-card__seg-btn--${key}${formantVisible[key] ? ' on' : ''}`}
-                        onClick={() => toggleFormant(key)}
-                        title={`Toggle ${key.toUpperCase()} dots`}
-                      >
-                        {key.toUpperCase()}
-                      </button>
-                    ))}
-                    <button
-                      className={`formant-card__seg-btn${formantVisible.f1 && formantVisible.f2 && formantVisible.f3 ? ' on' : ''}`}
-                      onClick={toggleAllFormants}
-                      title="Toggle all formants"
-                    >
-                      All
-                    </button>
-                  </div>
-                </div>
+                    {label}
+                  </span>
+                ))}
               </div>
+            </div>
+            <div className="panel-body">
+              <canvas
+                ref={specCanvasRef} style={{ height: '100%' }}
+                onContextMenu={handleSpecContextMenu}
+                onMouseMove={handleSpecMouseMove}
+                onMouseLeave={handleSpecMouseLeave}
+              />
+              {specCrosshair && (
+                <>
+                  <div className="spec-crosshair-line" style={{ top: specCrosshair.y }} />
+                  <div className="spec-crosshair-label" style={{ top: specCrosshair.y }}>
+                    {fmtCrosshairHz(specCrosshair.hz)}
+                  </div>
+                </>
+              )}
+              <div className="spec-track-toggles" role="group" aria-label="Spectrogram tracks">
+                {SPEC_TRACK_TOGGLES.map(([key, label, title]) => (
+                  <label
+                    key={key}
+                    className="spec-track-toggle"
+                    title={`Toggle ${title}`}
+                    style={{ '--track-color': SPEC_CTX_TRACK_COLORS[key] }}
+                  >
+                    <input
+                      type="checkbox"
+                      className="spec-track-check"
+                      checked={!!formantVisible[key]}
+                      onChange={() => toggleSpecTrack(key)}
+                    />
+                    <span>{label}</span>
+                  </label>
+                ))}
+              </div>
+              {specCtxMenu && (
+                <SpecContextMenu
+                  x={specCtxMenu.x} y={specCtxMenu.y}
+                  onClose={() => setSpecCtxMenu(null)}
+                  colormapName={colormapName} onColormapChange={handleColormapChange}
+                  specComputing={specComputing} onForceRefreshSpec={calcSpecForView}
+                  formantComputing={formantComputing} onRegenerateFormants={calcFormantForView}
+                />
+              )}
             </div>
           </div>
         </div>
@@ -3665,47 +4672,44 @@ export default function App() {
 
         <div className="tiers" ref={tiersDivRef}>
           {/* ── Tier visibility bar — always visible ── */}
-          <div style={{
-            display: 'flex', alignItems: 'center', gap: 6,
-            padding: '2px 8px', background: 'var(--bg-panel)',
-            borderBottom: '1px solid var(--border)', flexShrink: 0, height: 22,
-          }}>
-            <span style={{ fontSize: 9, color: 'var(--text-dark)', fontFamily: "'JetBrains Mono',monospace", marginRight: 4 }}>SHOW</span>
+          <div className="tier-visibility-bar">
+            <span className="tier-visibility-title">SHOW</span>
             {[
-              { label: 'WRD', visible: wordsVisible, toggle: v => setWordsVisible(v) },
-              { label: 'PHN', visible: phonesVisible, toggle: v => setPhonesVisible(v) },
+              { id: 'words', label: 'WRD', visible: wordsVisible, toggle: v => setWordsVisible(v) },
+              { id: 'phones', label: 'PHN', visible: phonesVisible, toggle: v => setPhonesVisible(v) },
               ...customTiers.map(t => ({
-                label: t.name.toUpperCase().slice(0, 4),
+                id: t.id,
+                label: customTierLabel(t.name),
                 visible: t.visible,
                 toggle: v => {
                   const ct = customTiersRef.current.map(x => x.id === t.id ? { ...x, visible: v } : x);
                   customTiersRef.current = ct; setCustomTiers([...ct]);
                 },
               })),
-            ].map(({ label, visible, toggle }) => (
-              <label key={label} style={{ display: 'flex', alignItems: 'center', gap: 3, cursor: 'pointer' }}>
+            ].map(({ id, label, visible, toggle }) => (
+              <label key={id} className="tier-visibility-label">
                 <input
                   type="checkbox"
                   className="tier-visibility-check"
                   checked={visible}
                   onChange={e => toggle(e.target.checked)}
                 />
-                <span style={{ fontSize: 9, fontFamily: "'JetBrains Mono',monospace", color: visible ? 'var(--text-dim)' : 'var(--text-dark)' }}>{label}</span>
+                <span className={visible ? 'is-visible' : ''}>{label}</span>
               </label>
             ))}
-            <span style={{ display: 'flex', alignItems: 'center', gap: 2, marginLeft: 6 }} title="Tile text size">
+            <span className="tier-text-size-controls" title="Tile text size">
               <button className="panel-gutter-btn" onClick={() => { focusedPanelRef.current = 'tiles'; adjustFontScale(-1); }} title="Decrease tile text size">−</button>
               <button className="panel-gutter-btn" onClick={() => { focusedPanelRef.current = 'tiles'; adjustFontScale(1); }} title="Increase tile text size">+</button>
             </span>
-            <span style={{ marginLeft: 'auto' }}>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 3, cursor: 'pointer' }} title="Auto-play tile audio on click">
+            <span className="tier-visibility-spacer">
+              <label className="tier-visibility-label" title="Auto-play tile audio on click">
                 <input
                   type="checkbox"
                   className="tier-visibility-check"
                   checked={autoPlayTile}
                   onChange={e => { autoPlayTileRef.current = e.target.checked; setAutoPlayTile(e.target.checked); }}
                 />
-                <span style={{ fontSize: 9, fontFamily: "'JetBrains Mono',monospace", color: autoPlayTile ? 'var(--text-dim)' : 'var(--text-dark)' }}>AUTO-PLAY</span>
+                <span className={autoPlayTile ? 'is-visible' : ''}>AUTO-PLAY</span>
               </label>
             </span>
           </div>
@@ -3718,7 +4722,18 @@ export default function App() {
               ...(selectedTierIds.has('words') ? { '--outline-color': 'rgba(58,123,213,0.7)', outlineOffset: '-1px' } : {}),
             }}
           >
-            <div className="tier-gutter"><span>WRD</span></div>
+            <div className="tier-gutter">
+              <span className="gutter-label">WRD</span>
+              <span className="gutter-subtitle">Words</span>
+              <button
+                className={`gutter-more-btn${wordsTierName !== 'words' ? ' gutter-more-btn--active' : ''}`}
+                title={`WRD pulls from: ${wordsTierName} (click to change)`}
+                onClick={(e) => {
+                  const r = e.currentTarget.getBoundingClientRect();
+                  setTierSourceMenu({ role: 'words', x: r.left, y: r.bottom + 4 });
+                }}
+              >⋮</button>
+            </div>
             <canvas ref={wordsCanvasRef} />
           </div>
           <div
@@ -3746,7 +4761,18 @@ export default function App() {
               ...(selectedTierIds.has('phones') ? { '--outline-color': 'rgba(60,200,130,0.7)', outlineOffset: '-1px' } : {}),
             }}
           >
-            <div className="tier-gutter"><span>PHN</span></div>
+            <div className="tier-gutter">
+              <span className="gutter-label">PHN</span>
+              <span className="gutter-subtitle">Phonemes</span>
+              <button
+                className={`gutter-more-btn${phonesTierName !== 'phones' ? ' gutter-more-btn--active' : ''}`}
+                title={`PHN pulls from: ${phonesTierName} (click to change)`}
+                onClick={(e) => {
+                  const r = e.currentTarget.getBoundingClientRect();
+                  setTierSourceMenu({ role: 'phones', x: r.left, y: r.bottom + 4 });
+                }}
+              >⋮</button>
+            </div>
             <canvas ref={phonesCanvasRef} />
           </div>
           {customTiers.map((tier, idx) => {
@@ -3787,7 +4813,7 @@ export default function App() {
                 >
                   <div className="tier-gutter" style={{ flexDirection: 'column', gap: 2 }}>
                     <span style={{ maxWidth: 44, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 9 }} title={tier.name}>
-                      {tier.name.toUpperCase().slice(0, 4)}
+                      {customTierLabel(tier.name)}
                     </span>
                     <button
                       className="tier-delete-btn"
@@ -3820,7 +4846,7 @@ export default function App() {
       </div>
 
       {/* Confidence dashboard side panel */}
-      {showDashboard && <ConfidenceDashboard words={words} />}
+      {showDashboard && <ConfidenceDashboard words={words} onSeek={seekToWord} />}
 
       </div>{/* flex wrapper */}
 
@@ -3877,17 +4903,26 @@ export default function App() {
 
       {/* ── Loop toast ───────────────────────────────────────────────────── */}
       {loopToast && (
-        <div style={{
-          position: 'fixed', top: 16, left: '50%', transform: 'translateX(-50%)', zIndex: 8000,
-          background: '#10101a', border: '1px solid #3050a0', borderRadius: 14,
-          padding: '20px 28px', maxWidth: 760,
-          fontFamily: 'Inter,system-ui,sans-serif', fontSize: 24, color: '#a0c0f0',
-          display: 'flex', alignItems: 'center', gap: 20,
-          boxShadow: '0 4px 16px rgba(0,0,0,0.5)',
+        <div className="toast toast--info" style={{
+          position: 'fixed', top: 16, left: '50%', transform: 'translateX(-50%)',
+          fontFamily: 'Inter,system-ui,sans-serif',
+          display: 'flex', alignItems: 'center', gap: 8,
         }}>
-          <img src="/loop-alert.gif" alt="" style={{ height: 64, borderRadius: 8, flexShrink: 0 }} />
+          <img src="/loop-alert.gif" alt="" style={{ height: 16, borderRadius: 3, flexShrink: 0 }} />
           <span>Looping selection…</span>
         </div>
+      )}
+
+      {/* ── WRD/PHN gutters' "⋮" tier-role picker (see TierSourceMenu/promoteTierToRole) */}
+      {tierSourceMenu && (
+        <TierSourceMenu
+          x={tierSourceMenu.x} y={tierSourceMenu.y}
+          onClose={() => setTierSourceMenu(null)}
+          title={tierSourceMenu.role === 'words' ? 'WRD will pull from:' : 'PHN will pull from:'}
+          tiers={tierSourceOptions}
+          activeTierId={tierSourceMenu.role}
+          onSelect={(id) => promoteTierToRole(tierSourceMenu.role, id)}
+        />
       )}
 
       {/* ── MFA word-picker modal (shown when words overlap in the selection) */}
