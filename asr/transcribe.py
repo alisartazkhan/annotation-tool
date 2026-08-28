@@ -40,6 +40,12 @@ Optional flags
                     MFA aligns the corrected transcript.
   --dictionary      MFA dictionary name or path   (default: english_us_arpa)
   --acoustic-model  MFA acoustic model name/path  (default: english_us_arpa)
+  --word-level-mfa  Align phonemes word-by-word (one neighbour word of context
+                    each side) instead of per Whisper segment, so a phoneme
+                    interval can never cross a word boundary. Off by default —
+                    whole-segment alignment gives MFA more acoustic context and
+                    is the higher-quality default; this trades some of that
+                    context for a hard per-word guarantee.
   --checkpoint      Override model checkpoint (Whisper only)
 
 Output TextGrid tiers
@@ -51,6 +57,7 @@ Output TextGrid tiers
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import sys
 from pathlib import Path
@@ -62,20 +69,24 @@ for _p in (_REPO, _HERE):
         sys.path.insert(0, str(_p))
 
 
+def _import(pkg_path: str, flat_path: str, attr: str):
+    """Import `attr` from `pkg_path` (installed `glistener` package layout),
+    falling back to `flat_path` (running directly out of this repo's asr/)."""
+    try:
+        module = importlib.import_module(pkg_path)
+    except ImportError:
+        module = importlib.import_module(flat_path)
+    return getattr(module, attr)
+
+
 def _load_model(name: str, checkpoint: str | None):
     if name == "whisper_asr":
-        try:
-            from glistener.models.whisper_asr import WhisperASR
-        except ImportError:
-            from models.whisper_asr import WhisperASR
+        WhisperASR = _import("glistener.models.whisper_asr", "models.whisper_asr", "WhisperASR")
         m = WhisperASR(checkpoint=checkpoint) if checkpoint else WhisperASR()
         m.setup()
         return m
     elif name == "parakeet":
-        try:
-            from glistener.models.parakeet import ParakeetASR
-        except ImportError:
-            from models.parakeet import ParakeetASR
+        ParakeetASR = _import("glistener.models.parakeet", "models.parakeet", "ParakeetASR")
         m = ParakeetASR(checkpoint=checkpoint) if checkpoint else ParakeetASR()
         m.setup()
         return m
@@ -104,6 +115,10 @@ def main() -> None:
                     help="MFA dictionary name or path (default: english_us_arpa).")
     ap.add_argument("--acoustic-model", default="english_us_arpa", dest="acoustic_model",
                     help="MFA acoustic model name or path (default: english_us_arpa).")
+    ap.add_argument("--word-level-mfa", action="store_true",
+                    help="Align phonemes word-by-word (with one neighbour word of "
+                         "context on each side) instead of per Whisper segment, so a "
+                         "phoneme interval can never cross a word boundary.")
     ap.add_argument("--json", type=Path, default=None, metavar="PATH",
                     help="Save raw ASR result as JSON at this path.")
     ap.add_argument("--reference-txt", type=Path, default=None, metavar="PATH",
@@ -166,10 +181,7 @@ def main() -> None:
     # ------------------------------------------------------------------ #
     if reference_path:
         print(f"[glistener] Correcting ASR output against reference transcript: {reference_path}")
-        try:
-            from glistener.reference_align import correct_with_reference
-        except ImportError:
-            from reference_align import correct_with_reference
+        correct_with_reference = _import("glistener.reference_align", "reference_align", "correct_with_reference")
         reference_text = reference_path.read_text(encoding="utf-8")
         result["segments"] = correct_with_reference(result["segments"], reference_text)
         n_words = sum(len(seg.get("words", [])) for seg in result.get("segments", []))
@@ -181,15 +193,13 @@ def main() -> None:
     run_mfa_flag = args.from_json is not None or (not args.no_mfa and out_path is not None)
     if run_mfa_flag:
         print("[glistener] Running MFA alignment…")
-        try:
-            from glistener.aligner import run_mfa
-        except ImportError:
-            from aligner import run_mfa
+        run_mfa = _import("glistener.aligner", "aligner", "run_mfa")
         result = run_mfa(
             result,
             audio,
             dictionary=args.dictionary,
             acoustic_model=args.acoustic_model,
+            word_level=args.word_level_mfa,
         )
         n_phones = len(result.get("phoneme_chars_mfa_flat", []))
         print(f"[glistener] MFA done: {n_phones} phone interval(s).")
@@ -209,10 +219,7 @@ def main() -> None:
     # ------------------------------------------------------------------ #
     if out_path:
         print("[glistener] Writing TextGrid…")
-        try:
-            from glistener.textgrid_writer import write_textgrid
-        except ImportError:
-            from textgrid_writer import write_textgrid
+        write_textgrid = _import("glistener.textgrid_writer", "textgrid_writer", "write_textgrid")
         write_textgrid(result, out_path)
 
     print("\n[glistener] Done.")

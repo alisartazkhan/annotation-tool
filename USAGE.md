@@ -29,6 +29,8 @@ You can also load files at any time without restarting — click **More ⋮** in
 <video src="https://github.com/user-attachments/assets/642f285d-c20b-4bd4-8114-e0bb2c3ec80d" controls width="100%"></video>
 
 > **Non-English audio:** MFA (used by both the initial ASR pipeline and the in-app MFA re-alignment button) defaults to English. See [Advanced features → In-browser MFA re-alignment](ADVANCED.md#in-browser-mfa-re-alignment) to point it at another language, or [Transcription → Non-English audio](TRANSCRIPTION.md#non-english-audio) for the initial pipeline.
+>
+> **Phonemes not lining up under their word:** regenerate the TextGrid with `--word-level-mfa` to force each phoneme to stay within its own word's boundary — see [Transcription → Constraining phonemes to word boundaries](TRANSCRIPTION.md#constraining-phonemes-to-word-boundaries).
 
 ---
 

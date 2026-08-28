@@ -122,6 +122,7 @@ _CHECKPOINT = "tiny.en"   # change to e.g. "base.en", "small.en", "large-v3-turb
 | `--json PATH` | — | Save the raw ASR result as JSON at this path (step 1) |
 | `--reference-txt PATH` | — | Optional reference transcript (`.txt`) of the audio's real text; corrects ASR's word-level output against it before MFA alignment (step 2 — see [Using a reference transcript](#using-a-reference-transcript) below) |
 | `--no-mfa` | off | Skip MFA; writes a words-only TextGrid (requires `--output`) |
+| `--word-level-mfa` | off | Align phonemes word-by-word (one neighbour word of context each side) instead of per Whisper segment, so a phoneme interval can never cross a word boundary. Off by default — whole-segment alignment gives MFA more acoustic context and is the higher-quality default; this trades some of that context for a hard per-word guarantee. |
 | `--dictionary` | `english_us_arpa` | MFA dictionary name or path |
 | `--acoustic-model` | `english_us_arpa` | MFA acoustic model name or path |
 | `--checkpoint` | model default | Override model checkpoint (Whisper only) |

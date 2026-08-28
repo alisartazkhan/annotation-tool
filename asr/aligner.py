@@ -243,13 +243,12 @@ def _align_segment(
     transcript: str,
     seg_t0: float,
     seg_t1: float,
-) -> tuple[list[dict], list[dict]]:
+) -> list[dict]:
     """
     Align one segment given as a native (begin, end) offset into a shared WAV
     file — Kalpy's Segment class supports this directly (standard Kaldi segment
     semantics), so there's no need to write/reread a fresh temp file per segment.
-    Returns (phones_tier, words_tier) in the same format as mfa_server.py's
-    /align endpoint.
+    Returns phones_tier in the same format as mfa_server.py's /align endpoint.
     """
     from kalpy.utterance import Utterance, Segment
 
@@ -262,15 +261,8 @@ def _align_segment(
     ctm = aligner.align_utterance(utt)
 
     phones_tier: list[dict] = []
-    words_tier: list[dict] = []
 
     for wi in ctm.word_intervals:
-        if wi.label and wi.label not in ('', '<eps>'):
-            words_tier.append({
-                't0': round(wi.begin, 6),
-                't1': round(wi.end,   6),
-                'text': wi.label,
-            })
         for pi in wi.phones:
             label = pi.label or ''
             ipa = _arpa_to_ipa(label)
@@ -281,7 +273,82 @@ def _align_segment(
                     'text': ipa,
                 })
 
-    return phones_tier, words_tier
+    return phones_tier
+
+
+def _align_word_in_context(
+    aligner,
+    wav_path: Path,
+    words: list[str],
+    word_times: list[tuple[float, float]],
+    idx: int,
+    win_lo: float,
+    win_hi: float,
+) -> list[dict]:
+    """
+    Align a single word (``words[idx]``) using up to one neighbouring word of
+    context on each side plus a small acoustic pad — enough for MFA to see
+    coarticulation at the word's edges — then return only that word's own
+    phones, clamped to its own ``word_times[idx]`` span so they can't spill
+    into a neighbouring word. ``win_lo``/``win_hi`` are the enclosing segment's
+    own bounds, so the context window never crosses into a different segment.
+    Used by run_mfa's word_level=True path.
+
+    If Whisper's own timestamp for this word is badly wrong (not just
+    imprecise — off by seconds, e.g. around a mishandled pause), MFA can
+    correctly place the word's audio entirely outside word_times[idx], and
+    clamping would then discard every phone. In that case this falls back to
+    the raw, unclamped phones instead of returning nothing — visible and
+    correctable by dragging, same as today's segment-level alignment would
+    leave it, rather than the word silently vanishing.
+    """
+    from kalpy.utterance import Utterance, Segment
+
+    PAD = 0.1  # seconds of extra acoustic context beyond the neighbour word itself
+    lo = idx - 1 if idx > 0 else idx
+    hi = idx + 1 if idx < len(words) - 1 else idx
+    win_t0 = max(win_lo, word_times[lo][0] - PAD)
+    win_t1 = min(win_hi, word_times[hi][1] + PAD)
+    transcript = ' '.join(words[lo:hi + 1])
+    target_pos = idx - lo  # this word's position within the windowed transcript
+
+    segment = Segment(str(wav_path), win_t0, win_t1, 0)
+    utt = Utterance(segment, transcript, None, None)
+    ctm = aligner.align_utterance(utt)
+
+    # Forced alignment decodes the given word sequence in order (no insertions/
+    # deletions), so real (non-silence) word intervals correspond positionally
+    # to the transcript tokens — same assumption _align_segment already makes.
+    real_words = [wi for wi in ctm.word_intervals if wi.label and wi.label not in ('', '<eps>')]
+    if target_pos >= len(real_words):
+        return []
+
+    w_t0, w_t1 = word_times[idx]
+    raw_phones: list[dict] = []
+    for pi in real_words[target_pos].phones:
+        label = pi.label or ''
+        ipa = _arpa_to_ipa(label)
+        if not label or label in ('', '<eps>') or ipa in _SILENCE_IPA:
+            continue
+        raw_phones.append({'t0': round(pi.begin, 6), 't1': round(pi.end, 6), 'text': ipa})
+    if not raw_phones:
+        return []
+
+    clamped = [
+        {'t0': max(w_t0, p['t0']), 't1': min(w_t1, p['t1']), 'text': p['text']}
+        for p in raw_phones
+    ]
+    clamped = [p for p in clamped if p['t1'] - p['t0'] > 1e-4]
+    if clamped:
+        return clamped
+
+    # Clamping erased every phone — MFA placed this word's audio entirely
+    # outside [w_t0, w_t1], almost always because Whisper's own timestamp for
+    # this word is badly wrong rather than MFA being wrong. Fall back to the
+    # raw, unclamped alignment so the word doesn't silently disappear.
+    print(f'[MFA] word-level clamp would drop all phones for "{words[idx]}" '
+          f'[{w_t0:.3f}, {w_t1:.3f}] — falling back to unclamped alignment')
+    return raw_phones
 
 
 # ---------------------------------------------------------------------------
@@ -293,10 +360,20 @@ def run_mfa(
     audio_path: Path,
     dictionary: str = 'english_us_arpa',
     acoustic_model: str = 'english_us_arpa',
+    word_level: bool = False,
 ) -> Dict[str, Any]:
     """
     Mutates *result* in-place: adds ``phoneme_chars_mfa`` to each segment
     and ``phoneme_chars_mfa_flat`` at the top level.
+
+    word_level: when True, aligns each word individually (with one neighbouring
+    word of context on each side, via _align_word_in_context) and hard-clamps
+    its phones to the word's own [start, end] — phoneme intervals can then
+    never cross a word boundary. Segments without word-level timestamps fall
+    back to the default whole-segment alignment regardless. Off by default:
+    whole-segment alignment gives MFA more acoustic context to work with and
+    is the higher-quality default; word_level trades some of that context for
+    a hard per-word boundary guarantee.
 
     Returns the (possibly mutated) result dict.
     """
@@ -335,34 +412,76 @@ def run_mfa(
             return result
 
         for seg_i, seg in enumerate(segments):
-            text_raw = _segment_text(seg)
-            if not text_raw:
-                continue
-
             t0  = float(seg.get('start') or 0)
             t1  = min(float(seg.get('end') or 0), full_duration)
             dur = t1 - t0
             if dur < 0.05:
                 continue
 
-            # Normalise words (strip punctuation, lower) then substitute OOV
-            words_raw = [w.strip(string.punctuation).lower() for w in text_raw.split()]
-            words_raw = [w for w in words_raw if w]
-            words_subbed, oov_subs = _substitute_oov(words_raw, dictionary)
-            transcript = ' '.join(words_subbed)
+            words_list = seg.get('words') or []
 
-            import time
-            t_start = time.time()
-            try:
-                phones_tier, _words_tier = _align_segment(
-                    aligner, full_wav_path, transcript, t0, t1,
-                )
-            except Exception as e:
-                print(f'[MFA] Alignment failed for segment {seg_i} ("{transcript}"): {e}')
-                continue
+            if word_level and words_list:
+                # Per-word alignment: build the (token, absolute-time) pairs
+                # directly from seg['words'] — not by joining then re-splitting
+                # segment text — so token i always corresponds exactly to
+                # word_times[i], which _align_word_in_context relies on for
+                # clamping.
+                raw_tokens: list[str] = []
+                word_times: list[tuple[float, float]] = []
+                for w in words_list:
+                    tok = (w.get('word') or '').strip(string.punctuation).lower()
+                    if not tok:
+                        continue
+                    wt0 = max(t0, float(w.get('start') if w.get('start') is not None else t0))
+                    wt1 = min(t1, float(w.get('end') if w.get('end') is not None else wt0))
+                    if wt1 - wt0 < 0.01:
+                        continue
+                    raw_tokens.append(tok)
+                    word_times.append((wt0, wt1))
+                if not raw_tokens:
+                    continue
 
-            print(f'[MFA] Segment {seg_i}: {len(phones_tier)} phones in {time.time()-t_start:.2f}s'
-                  + (f'  OOV subs: {oov_subs}' if oov_subs else ''))
+                words_subbed, oov_subs = _substitute_oov(raw_tokens, dictionary)
+
+                import time
+                t_start = time.time()
+                phones_tier: list[dict] = []
+                for i in range(len(words_subbed)):
+                    try:
+                        phones_tier.extend(_align_word_in_context(
+                            aligner, full_wav_path, words_subbed, word_times, i, t0, t1,
+                        ))
+                    except Exception as e:
+                        print(f'[MFA] Word alignment failed for segment {seg_i} '
+                              f'word {i} ("{words_subbed[i]}"): {e}')
+
+                print(f'[MFA] Segment {seg_i}: {len(phones_tier)} phones in '
+                      f'{time.time()-t_start:.2f}s (word-level)'
+                      + (f'  OOV subs: {oov_subs}' if oov_subs else ''))
+
+            else:
+                text_raw = _segment_text(seg)
+                if not text_raw:
+                    continue
+
+                # Normalise words (strip punctuation, lower) then substitute OOV
+                words_raw = [w.strip(string.punctuation).lower() for w in text_raw.split()]
+                words_raw = [w for w in words_raw if w]
+                words_subbed, oov_subs = _substitute_oov(words_raw, dictionary)
+                transcript = ' '.join(words_subbed)
+
+                import time
+                t_start = time.time()
+                try:
+                    phones_tier = _align_segment(
+                        aligner, full_wav_path, transcript, t0, t1,
+                    )
+                except Exception as e:
+                    print(f'[MFA] Alignment failed for segment {seg_i} ("{transcript}"): {e}')
+                    continue
+
+                print(f'[MFA] Segment {seg_i}: {len(phones_tier)} phones in {time.time()-t_start:.2f}s'
+                      + (f'  OOV subs: {oov_subs}' if oov_subs else ''))
 
             # Convert phones_tier format to the internal phoneme_chars schema
             local: List[Dict[str, Any]] = [

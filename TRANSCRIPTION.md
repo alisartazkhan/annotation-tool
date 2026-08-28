@@ -62,6 +62,22 @@ For non-English **in-browser** MFA re-alignment (the MFA button while annotating
 
 ---
 
+### Constraining phonemes to word boundaries
+
+By default MFA aligns each ASR *segment* (a multi-word phrase) as one unit, which occasionally lets a phoneme land slightly outside its own word's timing — most visible in the annotation tool as a phoneme tile that doesn't line up under its word. Pass `--word-level-mfa` on step 2 to align each word individually instead (still with one neighbouring word of context on each side, so MFA keeps seeing coarticulation), then clamp that word's phones to its own boundary:
+
+```bash
+conda run -n aligner python asr/transcribe.py \
+    --from-json frontend-reactjs/public/output_whisper.json \
+    --audio     /path/to/audio.wav \
+    --output    frontend-reactjs/public/output_whisper.TextGrid \
+    --word-level-mfa
+```
+
+Off by default — whole-segment alignment gives MFA more acoustic context and is the higher-quality default; word-level trades some of that context for a hard per-word boundary guarantee. That guarantee isn't absolute either: for the minority of words where Whisper's own timestamp disagrees with MFA's by more than the word is long (mostly short function words like "a"/"the"/"is"), the word falls back to the same unclamped behavior as the default instead of being silently dropped. See [asr/README.md](asr/README.md#all-flags) for the full flag reference.
+
+---
+
 ### Using a reference transcript
 
 If you already know the exact text of the audio (a script, or a transcript you've hand-corrected), give the pipeline that text and it'll correct ASR's word-level output against it before MFA alignment runs — useful since ASR mishearings otherwise propagate straight into the final TextGrid.

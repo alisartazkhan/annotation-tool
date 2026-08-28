@@ -1148,8 +1148,7 @@ export default function App() {
   const [wordsVisible, setWordsVisible]   = useState(true);
   const [phonesVisible, setPhonesVisible] = useState(true);
   const [showTierManager, setShowTierManager] = useState(false);
-  const [selectedTileIds, setSelectedTileIds] = useState(new Set()); // ids of selected tiles (drives rerender)
-  const [selectedTierIds, setSelectedTierIds] = useState(new Set()); // tier border highlight
+  const [selectedTierIds, setSelectedTierIds] = useState(new Set()); // tier border highlight; also drives re-render on tile (de)selection
   const [showExportPopover, setShowExportPopover] = useState(false);
   const [showMoreMenu, setShowMoreMenu] = useState(false);
   const [saveState, setSaveState] = useState(null); // null | 'saving' | 'saved' | 'error'
@@ -1213,7 +1212,6 @@ export default function App() {
   // 'waveform' | 'tiles' — which panel was last clicked, so +/- keys know whether to
   // adjust yZoomRef or fontScaleRef. No state twin: nothing displays this value.
   const focusedPanelRef  = useRef('waveform');
-  const specWorkerRef    = useRef(null);
   const wordsRef         = useRef([]);
   const phonesRef        = useRef([]);
   const customTiersRef   = useRef([]);
@@ -1229,7 +1227,6 @@ export default function App() {
   const editModeRef      = useRef(true);
   const undoStackRef     = useRef([]); // snapshots: { words, phones, customTiers }
   const redoStackRef = useRef([]); //snapshot for redo
-  const [undoCount, setUndoCount] = useState(0);
   const [redoCount, setRedoCount] = useState(0);
   const hoverEdgeRef     = useRef(null); // { id, tierId, side: 'left'|'right' } for cursor feedback
   const selectedTilesRef = useRef(new Map()); // id → { id, tierId } — multi-selected tiles in edit mode
@@ -1240,7 +1237,6 @@ export default function App() {
   // ── Canvas element refs ───────────────────────────────────────────────
   const waveCanvasRef    = useRef(null);
   const specCanvasRef    = useRef(null);
-  const freqAxisCanvasRef = useRef(null);
   const rulerCanvasRef   = useRef(null);
   const wordsCanvasRef   = useRef(null);
   const phonesCanvasRef  = useRef(null);
@@ -1288,17 +1284,16 @@ export default function App() {
   }, []);
 
   // ── Selection helpers ─────────────────────────────────────────────────
-  // Sync selectedTilesRef → React state for re-renders (border + highlight)
+  // Sync selectedTilesRef → React state for re-renders (tier border highlight;
+  // tile highlighting itself reads selectedTilesRef directly in drawTier, this
+  // state exists only to force the re-render)
   const syncSelectionState = useCallback(() => {
-    const ids = new Set(selectedTilesRef.current.keys());
     const tids = new Set([...selectedTilesRef.current.values()].map(e => e.tierId));
-    setSelectedTileIds(ids);
     setSelectedTierIds(tids);
   }, []);
 
   const clearSelection = useCallback(() => {
     selectedTilesRef.current.clear();
-    setSelectedTileIds(new Set());
     setSelectedTierIds(new Set());
   }, []);
 
@@ -1307,80 +1302,57 @@ export default function App() {
   // so a "use this tier as Words/Phones" swap (promoteTierToRole) is undoable just
   // like any other edit — undoing it must restore not just the item arrays but also
   // which tier's name was playing each role.
+  const snapshotState = useCallback(() => ({
+    words:  wordsRef.current.map(it => ({ ...it })),
+    phones: phonesRef.current.map(it => ({ ...it })),
+    customTiers: customTiersRef.current.map(t => ({ ...t, items: t.items.map(i => ({ ...i })) })),
+    wordsTierName: wordsTierNameRef.current,
+    phonesTierName: phonesTierNameRef.current,
+  }), []);
+
+  // Restores refs + state from a snapshot (popUndo/popRedo differ only in which
+  // stack they push the pre-restore state onto and pop the snapshot from).
+  const applySnapshot = useCallback((snap) => {
+    wordsRef.current  = snap.words;
+    phonesRef.current = snap.phones;
+    customTiersRef.current = snap.customTiers || [];
+    wordsTierNameRef.current = snap.wordsTierName ?? 'words';
+    phonesTierNameRef.current = snap.phonesTierName ?? 'phones';
+    setWords([...snap.words]);
+    setPhones([...snap.phones]);
+    setCustomTiers([...(snap.customTiers || [])]);
+    setWordsTierName(wordsTierNameRef.current);
+    setPhonesTierName(phonesTierNameRef.current);
+    const current = serializeTextGrid(
+      durationRef.current, snap.words, snap.phones, snap.customTiers || [],
+      false, wordsTierNameRef.current, phonesTierNameRef.current,
+    );
+    setIsDirty(current !== savedTextGridRef.current);
+  }, []);
+
   const pushUndo = useCallback(() => {
-    undoStackRef.current.push({
-      words:  wordsRef.current.map(it => ({ ...it })),
-      phones: phonesRef.current.map(it => ({ ...it })),
-      customTiers: customTiersRef.current.map(t => ({ ...t, items: t.items.map(i => ({ ...i })) })),
-      wordsTierName: wordsTierNameRef.current,
-      phonesTierName: phonesTierNameRef.current,
-    });
+    undoStackRef.current.push(snapshotState());
     if (undoStackRef.current.length > 100) undoStackRef.current.shift();
     redoStackRef.current = []; // a new edit invalidates the redo history
-    setUndoCount(undoStackRef.current.length);
     setRedoCount(0);
     setIsDirty(true);
-  }, []);
+  }, [snapshotState]);
 
   const popUndo = useCallback(() => {
     const snap = undoStackRef.current.pop();
     if (!snap) return;
-    // save current state to the redo stack before restoring
-    redoStackRef.current.push({
-      words:  wordsRef.current.map(it => ({ ...it })),
-      phones: phonesRef.current.map(it => ({ ...it })),
-      customTiers: customTiersRef.current.map(t => ({ ...t, items: t.items.map(i => ({ ...i })) })),
-      wordsTierName: wordsTierNameRef.current,
-      phonesTierName: phonesTierNameRef.current,
-    });
-    wordsRef.current  = snap.words;
-    phonesRef.current = snap.phones;
-    customTiersRef.current = snap.customTiers || [];
-    wordsTierNameRef.current = snap.wordsTierName ?? 'words';
-    phonesTierNameRef.current = snap.phonesTierName ?? 'phones';
-    setWords([...snap.words]);
-    setPhones([...snap.phones]);
-    setCustomTiers([...(snap.customTiers || [])]);
-    setWordsTierName(wordsTierNameRef.current);
-    setPhonesTierName(phonesTierNameRef.current);
-    setUndoCount(undoStackRef.current.length);
+    redoStackRef.current.push(snapshotState()); // save current state to the redo stack before restoring
+    applySnapshot(snap);
     setRedoCount(redoStackRef.current.length);
-    const current = serializeTextGrid(
-      durationRef.current, snap.words, snap.phones, snap.customTiers || [],
-      false, wordsTierNameRef.current, phonesTierNameRef.current,
-    );
-    setIsDirty(current !== savedTextGridRef.current);
-  }, []);
+  }, [snapshotState, applySnapshot]);
 
   const popRedo = useCallback(() => {
     const snap = redoStackRef.current.pop();
     if (!snap) return;
-    // save current state to the undo stack before restoring
-    undoStackRef.current.push({
-      words:  wordsRef.current.map(it => ({ ...it })),
-      phones: phonesRef.current.map(it => ({ ...it })),
-      customTiers: customTiersRef.current.map(t => ({ ...t, items: t.items.map(i => ({ ...i })) })),
-      wordsTierName: wordsTierNameRef.current,
-      phonesTierName: phonesTierNameRef.current,
-    });
-    wordsRef.current  = snap.words;
-    phonesRef.current = snap.phones;
-    customTiersRef.current = snap.customTiers || [];
-    wordsTierNameRef.current = snap.wordsTierName ?? 'words';
-    phonesTierNameRef.current = snap.phonesTierName ?? 'phones';
-    setWords([...snap.words]);
-    setPhones([...snap.phones]);
-    setCustomTiers([...(snap.customTiers || [])]);
-    setWordsTierName(wordsTierNameRef.current);
-    setPhonesTierName(phonesTierNameRef.current);
-    setUndoCount(undoStackRef.current.length);
+    undoStackRef.current.push(snapshotState()); // save current state to the undo stack before restoring
+    applySnapshot(snap);
     setRedoCount(redoStackRef.current.length);
-    const current = serializeTextGrid(
-      durationRef.current, snap.words, snap.phones, snap.customTiers || [],
-      false, wordsTierNameRef.current, phonesTierNameRef.current,
-    );
-    setIsDirty(current !== savedTextGridRef.current);
-  }, []);
+  }, [snapshotState, applySnapshot]);
   // ── Draw helpers ──────────────────────────────────────────────────────
 
   const drawSelectionRect = useCallback((ctx, w, h, alpha = 0.15) => {
@@ -1679,7 +1651,6 @@ export default function App() {
     // Default tier chrome (no score / not edited). Selection brightens these same RGBs
     // rather than swapping to a fixed accent color.
     const defaultRgb  = DEFAULT_TILE_RGB;
-    const strokeColor = rgbaFromRgb(defaultRgb, isWord ? 0.58 : 0.52); // hover-edge restore
     const maxFontSize = isWord ? 20 : 18;
     const fontSize    = Math.round(Math.max(11, Math.min(maxFontSize, rowH * 0.34)) * fontScaleRef.current);
     const font        = isWord ? `500 ${fontSize}px Inter,sans-serif` : `${Math.max(10, fontSize - 1)}px 'JetBrains Mono',monospace`;
@@ -1775,7 +1746,6 @@ export default function App() {
           const hx = hoverEdge.side === 'left' ? x0 : x1;
           ctx.strokeStyle = '#f0c040'; ctx.lineWidth = 2.5;
           ctx.beginPath(); ctx.moveTo(hx, ry + tilePadY); ctx.lineTo(hx, ry + rowH - tilePadY); ctx.stroke();
-          ctx.strokeStyle = strokeColor; ctx.lineWidth = 1.5;
         }
       }
 
@@ -3318,71 +3288,186 @@ export default function App() {
       }
 
       if (side === 'left' || side === 'right') {
-        // Edge drag — always single tile
         const startX = e.clientX;
         const startT = side === 'left' ? item.t0 : item.t1;
-        const neighbour = items.find(it =>
-          it.id !== item.id && it.row === item.row &&
-          Math.abs((side === 'left' ? it.t1 : it.t0) - startT) < 1e-6
+
+        // Only the *currently selected* tiles whose own edge on this same side sits
+        // at this exact instant actually flank this boundary and should extend
+        // together — a tile that merely happens to also be selected, but doesn't
+        // touch this particular edge, stays put.
+        const selCandidates = [];
+        for (const [selId, selEntry] of selectedTilesRef.current) {
+          const tItems = selEntry.tierId === 'words'  ? wordsRef.current
+                       : selEntry.tierId === 'phones' ? phonesRef.current
+                       : (customTiersRef.current.find(t => t.id === selEntry.tierId)?.items ?? []);
+          const it = tItems.find(x => x.id === selId);
+          if (it) selCandidates.push({ id: selId, tierId: selEntry.tierId, origT0: it.t0, origT1: it.t1 });
+        }
+        const flankers = selCandidates.filter(o =>
+          Math.abs((side === 'left' ? o.origT0 : o.origT1) - startT) < 1e-6
         );
-        const minT = side === 'left'
-          ? (neighbour ? neighbour.t0 + 0.01 : 0)
-          : item.t0 + 0.01;
-        const maxT = side === 'right'
-          ? (neighbour ? neighbour.t1 - 0.01 : DUR)
-          : item.t1 - 0.01;
 
-        // Snap boundaries are fixed for the whole gesture — only the dragged tile
-        // (and its already-excluded neighbour) move — so compute once instead of
-        // rescanning every tier's items on every mousemove tick.
-        const crossBounds = getCrossTierBoundaries(tierId);
-        const sameBounds = itemsRef.current
-          .filter(it => it.id !== item.id && (neighbour ? it.id !== neighbour.id : true))
-          .flatMap(it => [it.t0, it.t1]);
-        const allBounds = [...crossBounds, ...sameBounds];
+        if (flankers.length > 1) {
+          // ── Group edge drag: extend/shrink every flanking tile's matching edge
+          // together by the same delta (each tile's own opposite edge stays fixed) —
+          // e.g. a word tile and its last-phoneme tile, both ending at the same
+          // instant, lengthen/shorten together in one gesture. Mirrors group body
+          // drag below (same tier/bounds bookkeeping), but shifts one edge per tile.
+          const widths = flankers.map(o => o.origT1 - o.origT0);
+          // Same delta applies to every flanking tile, so the allowed range is the
+          // intersection of each tile's own "don't invert past 0.01s wide, don't cross
+          // [0, DUR]" constraint — same per-tile rule as the single-tile case below.
+          const minDt = side === 'left'
+            ? -Math.min(...flankers.map(o => o.origT0))
+            : 0.01 - Math.min(...widths);
+          const maxDt = side === 'left'
+            ? Math.min(...widths) - 0.01
+            : DUR - Math.max(...flankers.map(o => o.origT1));
 
-        let didPushUndo = false;
-        const onMove = (ev) => {
-          if (!didPushUndo) { pushUndo(); didPushUndo = true; }
-          const dx = ev.clientX - startX;
-          const dt = (dx / rect.width) * (viewRef.current.t1 - viewRef.current.t0);
-          let newT = Math.max(minT, Math.min(maxT, startT + dt));
-
-          // Magnetic snap to cross-tier + same-tier boundaries (Alt to disable)
-          const SNAP_PX = 10;
-          const snapThreshT = (SNAP_PX / rect.width) * (viewRef.current.t1 - viewRef.current.t0);
-          if (!ev.altKey) {
-            let best = null, bestD = snapThreshT;
-            for (const bt of allBounds) {
-              const d = Math.abs(newT - bt);
-              if (d < bestD) { bestD = d; best = bt; }
-            }
-            if (best !== null) newT = Math.max(minT, Math.min(maxT, best));
+          const origsByTier = new Map(); // tierId → [{ id, origT0, origT1 }]
+          for (const f of flankers) {
+            if (!origsByTier.has(f.tierId)) origsByTier.set(f.tierId, []);
+            origsByTier.get(f.tierId).push(f);
           }
-          // Guide line always tracks the dragged edge's live position, snapped or not.
-          snapGuideRef.current = { ts: [newT] };
+          // Only snap to boundaries outside the flanking set (or unselected same-tier
+          // neighbours) — never to another flanking tile's own edge — same convention
+          // as group body drag below.
+          const flankerIds = new Set(flankers.map(o => o.id));
+          const draggedTierIds = new Set(origsByTier.keys());
+          const tiers = getAllTiers();
+          const crossBounds = tiers
+            .filter(t => !draggedTierIds.has(t.id))
+            .flatMap(t => t.items.flatMap(it => [it.t0, it.t1]));
+          const sameBounds = tiers
+            .filter(t => draggedTierIds.has(t.id))
+            .flatMap(t => t.items.filter(it => !flankerIds.has(it.id)).flatMap(it => [it.t0, it.t1]));
+          const allBounds = [...crossBounds, ...sameBounds];
+          const tierRefs = new Map();
+          for (const dragTierId of draggedTierIds) {
+            tierRefs.set(dragTierId,
+              dragTierId === 'words'  ? wordsRef
+              : dragTierId === 'phones' ? phonesRef
+              : { current: customTiersRef.current.find(t => t.id === dragTierId)?.items ?? [] });
+          }
 
-          const updated = itemsRef.current.map(it => {
-            if (it.id === item.id) return { ...it, [side === 'left' ? 't0' : 't1']: newT };
-            if (neighbour && it.id === neighbour.id) return { ...it, [side === 'left' ? 't1' : 't0']: newT };
-            return it;
-          });
-          commitItems(updated);
-          // Full redraw (not just this canvas) so the guide line replaces its previous
-          // position on every canvas instead of leaving a trail on wave/spec/other tiers.
-          redraw();
-          drawSnapGuide();
-        };
-        const onUp = () => {
-          window.removeEventListener('mousemove', onMove);
-          window.removeEventListener('mouseup', onUp);
+          let didPushUndo = false;
+          const onMove = (ev) => {
+            if (!didPushUndo) { pushUndo(); didPushUndo = true; }
+            const dx = ev.clientX - startX;
+            let dt = Math.max(minDt, Math.min(maxDt,
+              (dx / rect.width) * (viewRef.current.t1 - viewRef.current.t0)));
+
+            // Snap the anchor tile's dragged edge (the one actually grabbed); the
+            // resulting delta then applies uniformly to every flanking tile.
+            if (!ev.altKey) {
+              const SNAP_PX = 10;
+              const snapThreshT = (SNAP_PX / rect.width) * (viewRef.current.t1 - viewRef.current.t0);
+              const newAnchorT = startT + dt;
+              let best = null, bestD = snapThreshT;
+              for (const bt of allBounds) {
+                const d = Math.abs(newAnchorT - bt);
+                if (d < bestD) { bestD = d; best = bt; }
+              }
+              if (best !== null) dt = Math.max(minDt, Math.min(maxDt, best - startT));
+            }
+            // One guide line per flanking tile's live dragged edge — they start
+            // coincident (that's what makes them flankers) and stay coincident.
+            snapGuideRef.current = { ts: flankers.map(o => (side === 'left' ? o.origT0 : o.origT1) + dt) };
+
+            for (const [dragTierId, origList] of origsByTier) {
+              const tItemsRef = tierRefs.get(dragTierId);
+              const idSet = new Set(origList.map(o => o.id));
+              const origMap = new Map(origList.map(o => [o.id, o]));
+              const updated = tItemsRef.current.map(it => {
+                if (!idSet.has(it.id)) return it;
+                const o = origMap.get(it.id);
+                return side === 'left'
+                  ? { ...it, t0: o.origT0 + dt }
+                  : { ...it, t1: o.origT1 + dt };
+              });
+              const withRows = assignRows(updated);
+              tItemsRef.current = withRows;
+              commitTierItems(dragTierId, withRows);
+            }
+            redraw();
+            drawSnapGuide();
+          };
+          const onUp = () => {
+            window.removeEventListener('mousemove', onMove);
+            window.removeEventListener('mouseup', onUp);
+            canvas.style.cursor = 'ew-resize';
+            snapGuideRef.current = null;
+            redraw();
+          };
           canvas.style.cursor = 'ew-resize';
-          snapGuideRef.current = null;
-          redraw();
-        };
-        canvas.style.cursor = 'ew-resize';
-        window.addEventListener('mousemove', onMove);
-        window.addEventListener('mouseup', onUp);
+          window.addEventListener('mousemove', onMove);
+          window.addEventListener('mouseup', onUp);
+
+        } else {
+          // ── Edge drag — single tile ──────────────────────────────────
+          const neighbour = items.find(it =>
+            it.id !== item.id && it.row === item.row &&
+            Math.abs((side === 'left' ? it.t1 : it.t0) - startT) < 1e-6
+          );
+          const minT = side === 'left'
+            ? (neighbour ? neighbour.t0 + 0.01 : 0)
+            : item.t0 + 0.01;
+          const maxT = side === 'right'
+            ? (neighbour ? neighbour.t1 - 0.01 : DUR)
+            : item.t1 - 0.01;
+
+          // Snap boundaries are fixed for the whole gesture — only the dragged tile
+          // (and its already-excluded neighbour) move — so compute once instead of
+          // rescanning every tier's items on every mousemove tick.
+          const crossBounds = getCrossTierBoundaries(tierId);
+          const sameBounds = itemsRef.current
+            .filter(it => it.id !== item.id && (neighbour ? it.id !== neighbour.id : true))
+            .flatMap(it => [it.t0, it.t1]);
+          const allBounds = [...crossBounds, ...sameBounds];
+
+          let didPushUndo = false;
+          const onMove = (ev) => {
+            if (!didPushUndo) { pushUndo(); didPushUndo = true; }
+            const dx = ev.clientX - startX;
+            const dt = (dx / rect.width) * (viewRef.current.t1 - viewRef.current.t0);
+            let newT = Math.max(minT, Math.min(maxT, startT + dt));
+
+            // Magnetic snap to cross-tier + same-tier boundaries (Alt to disable)
+            const SNAP_PX = 10;
+            const snapThreshT = (SNAP_PX / rect.width) * (viewRef.current.t1 - viewRef.current.t0);
+            if (!ev.altKey) {
+              let best = null, bestD = snapThreshT;
+              for (const bt of allBounds) {
+                const d = Math.abs(newT - bt);
+                if (d < bestD) { bestD = d; best = bt; }
+              }
+              if (best !== null) newT = Math.max(minT, Math.min(maxT, best));
+            }
+            // Guide line always tracks the dragged edge's live position, snapped or not.
+            snapGuideRef.current = { ts: [newT] };
+
+            const updated = itemsRef.current.map(it => {
+              if (it.id === item.id) return { ...it, [side === 'left' ? 't0' : 't1']: newT };
+              if (neighbour && it.id === neighbour.id) return { ...it, [side === 'left' ? 't1' : 't0']: newT };
+              return it;
+            });
+            commitItems(updated);
+            // Full redraw (not just this canvas) so the guide line replaces its previous
+            // position on every canvas instead of leaving a trail on wave/spec/other tiers.
+            redraw();
+            drawSnapGuide();
+          };
+          const onUp = () => {
+            window.removeEventListener('mousemove', onMove);
+            window.removeEventListener('mouseup', onUp);
+            canvas.style.cursor = 'ew-resize';
+            snapGuideRef.current = null;
+            redraw();
+          };
+          canvas.style.cursor = 'ew-resize';
+          window.addEventListener('mousemove', onMove);
+          window.addEventListener('mouseup', onUp);
+        }
 
       } else if (side === 'body') {
         const startX = e.clientX;
